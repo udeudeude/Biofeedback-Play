@@ -255,7 +255,7 @@ class BiofeedbackState:
                 pass
 
 
-STATE = BiofeedbackState()
+STATE: BiofeedbackState | None = None
 
 
 HTML = r"""<!doctype html>
@@ -685,6 +685,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    global STATE
+    STATE = BiofeedbackState()
+
     url = f"http://{HOST}:{PORT}"
     server = ThreadingHTTPServer((HOST, PORT), Handler)
 
