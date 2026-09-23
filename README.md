@@ -15,6 +15,8 @@ The first working target is the Wild Divine Lightstone (USB vendor 0x14FA, produ
 - Records timestamped CSV files
 - Sends OSC messages for SuperCollider and other creative software
 - Uses no web framework or JavaScript libraries
+- Includes a browser-based HID workbench for scanning devices, testing access, and making raw captures
+- Saves diagnostic captures as JSON in the local captures directory
 
 The two RAW fields were experimentally identified on the physical device:
 
@@ -31,7 +33,7 @@ From the repository:
 
 The app opens http://127.0.0.1:8765 automatically.
 
-A macOS launcher is also included as Biofeedback Play.command and is committed as an executable file. After the repository is pulled, normal use should be as simple as double-clicking that launcher in Finder. It starts the local service and opens the browser interface.
+A macOS launcher is also included as Biofeedback Play.command and is committed as an executable file. After the repository is pulled, normal use should be as simple as double-clicking that launcher in Finder. It checks GitHub for a safe fast-forward update, starts the local service, and opens the browser interface. If tracked local edits are present, the launcher skips the automatic update rather than overwriting them.
 
 ## OSC
 
@@ -59,3 +61,24 @@ CSV recordings are written into the recordings directory with columns:
 Hardware-specific adapters should eventually feed a shared event model rather than forcing later devices to imitate the Lightstone protocol. The browser interface, recording, OSC, MIDI, and visual experiments can then consume that common stream independently.
 
 This first prototype intentionally keeps derived physiology conservative. It exposes the raw signals first; heart-rate detection, smoothing, normalization, calibration, and signal-quality measures belong in later layers.
+
+
+## Device diagnostics
+
+The Devices & Diagnostics panel is intended to replace most one-off Terminal probing during hardware discovery.
+
+It can:
+
+- scan connected HID devices
+- show manufacturer, product, USB vendor/product IDs, usage page, and usage
+- test whether Biofeedback Play can open a selected device
+- capture raw HID reports for 2, 5, or 10 seconds
+- save the full capture as JSON under captures/
+- copy a compact report suitable for pasting into a development chat
+
+Raw capture is intentionally generic. Device-specific interpretation belongs in adapters once a protocol is understood.
+
+Known devices so far:
+
+- Wild Divine Lightstone: 0x14FA:0x0001
+- HeartMath emWave Pulse Sensor: 0x0E30:0x0002
