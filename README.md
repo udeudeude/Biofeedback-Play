@@ -1,92 +1,128 @@
 # Biofeedback Play
 
-A local biofeedback playground for hardware such as the Wild Divine Lightstone, Muse headband, HeartMath emWave, and future sensors.
+Biofeedback Play is a local, device-agnostic workspace for live physiological signals, visual feedback, audio sonification, recording, diagnostics, and creative-control output.
 
-The first working target is the Wild Divine Lightstone (USB vendor 0x14FA, product 0x0001).
+Currently supported live devices:
 
-## Current prototype
+- Wild Divine Lightstone, USB HID 0x14FA:0x0001
+- HeartMath emWave Pulse Sensor, USB HID 0x0E30:0x0002
 
-- Finds the Lightstone through HID
-- Reassembles its fragmented 8-byte HID reports
-- Parses the Lightstone RAW stream
-- Displays live skin-conductance and pulse-waveform graphs in a browser
-- Shows current raw values and connection state
-- Starts and stops acquisition from the browser
-- Records timestamped CSV files
-- Sends OSC messages for SuperCollider and other creative software
-- Uses no web framework or JavaScript libraries
-- Includes a browser-based HID workbench for scanning devices, testing access, and making raw captures
-- Saves diagnostic captures as JSON in the local captures directory
+The architecture is intentionally organized around devices and signals so later adapters such as Muse and MindFlex can add channels without redesigning the interface.
 
-The two RAW fields were experimentally identified on the physical device:
+## Interface
 
-1. first field: skin-conductance channel
-2. second field: pulse / blood-volume waveform channel
+The browser interface has two primary tabs.
 
-## Run
+### Use devices
 
-From the repository:
+This is the live-feedback workspace.
 
-    source .venv/bin/activate
-    python -m pip install -r requirements.txt
-    python biofeedback_play.py
+Each configured signal gets its own panel. A panel identifies:
 
-The app opens http://127.0.0.1:8765 automatically.
+- the source device
+- what signal is being displayed
+- units and interpretation cautions
+- current value and recent range
+- total samples received
+- nominal sample rate when known
+- OSC address
+- useful device-specific status such as emWave packet gaps
 
-A macOS launcher is also included as Biofeedback Play.command and is committed as an executable file. After the repository is pulled, normal use should be as simple as double-clicking that launcher in Finder. It checks GitHub for a safe fast-forward update, starts the local service, and opens the browser interface. If tracked local edits are present, the launcher skips the automatic update rather than overwriting them.
+If the source device is not connected, its signal panels collapse automatically.
+
+Each live signal panel also has its own **Audio** control. Audio is generated locally with the browser Web Audio API. It is a sonification of the changing sensor value, not a reconstructed heartbeat or diagnostic sound. Each signal can be turned on or off independently.
+
+### Device setup
+
+This tab contains:
+
+- configured-device connection state
+- start/stop acquisition controls per device
+- USB identity and transport information
+- global OSC settings
+- HID scanning and diagnostics
+- raw report capture
+
+Obviously unrelated HID devices such as keyboards, trackpads, cameras, storage devices, and Touch Bar interfaces are hidden by default in diagnostics. Unknown hardware remains visible.
+
+## Current signals
+
+### Wild Divine Lightstone
+
+- **Skin conductance**: raw skin-conductance channel from the two plain finger electrodes
+- **Pulse waveform**: raw blood-volume pulse waveform from the gold-dot finger sensor
+
+The raw channels were identified experimentally by sensor-removal tests. Values are kept in their original device units.
+
+### HeartMath emWave
+
+- **Pulse waveform**: direct 8-bit optical pulse waveform from the ear clip
+
+Observed emWave reports have the experimental form:
+
+    01 CC S0 S1 S2 S3 S4 S5
+
+where CC behaves as an 8-bit packet counter and S0 through S5 behave as six consecutive waveform samples. Biofeedback Play tracks packet gaps. Display timing currently uses 375 Hz as a nominal rate derived from capture behavior rather than as a manufacturer specification.
+
+## Recording
+
+Recording is session-wide rather than tied to one device. Connected signals are written to one long-format CSV file under recordings/:
+
+    unix_time, elapsed_s, device_id, signal_id, value
+
+This format allows different devices and sample rates to coexist in one session.
 
 ## OSC
 
-OSC is off by default. The browser interface can enable it and choose the destination host and port.
+OSC is off by default. The Device setup tab can enable it and choose a host and port.
 
 Default destination:
 
     127.0.0.1:57120
 
-Messages:
+Current messages:
 
     /biofeedback/lightstone/skin_raw
     /biofeedback/lightstone/pulse_raw
+    /biofeedback/emwave/pulse_raw
 
-Each carries one integer argument.
+Each currently carries one integer argument.
 
-## Recordings
-
-CSV recordings are written into the recordings directory with columns:
-
-    unix_time, elapsed_s, skin_raw, pulse_raw
-
-## Architecture direction
-
-Hardware-specific adapters should eventually feed a shared event model rather than forcing later devices to imitate the Lightstone protocol. The browser interface, recording, OSC, MIDI, and visual experiments can then consume that common stream independently.
-
-This first prototype intentionally keeps derived physiology conservative. It exposes the raw signals first; heart-rate detection, smoothing, normalization, calibration, and signal-quality measures belong in later layers.
-
+A starter SuperCollider receiver is included under supercollider/.
 
 ## Device diagnostics
 
-The Devices & Diagnostics panel is intended to replace most one-off Terminal probing during hardware discovery.
-
-It can:
+The HID workbench can:
 
 - scan connected HID devices
 - show manufacturer, product, USB vendor/product IDs, usage page, and usage
 - test whether Biofeedback Play can open a selected device
 - capture raw HID reports for 2, 5, or 10 seconds
-- save the full capture as JSON under captures/
-- copy a compact report suitable for pasting into a development chat
+- save full captures as JSON under captures/
+- copy a compact diagnostic report
 
-Raw capture is intentionally generic. Device-specific interpretation belongs in adapters once a protocol is understood.
+Raw capture is deliberately generic. Device-specific interpretation is added only after the protocol has evidence behind it.
 
-Known devices so far:
+## Run on macOS
 
-- Wild Divine Lightstone: 0x14FA:0x0001
-- HeartMath emWave Pulse Sensor: 0x0E30:0x0002
+The normal workflow is to double-click:
 
-## HeartMath emWave live support
+    Biofeedback Play.command
 
-Biofeedback Play can now open the emWave USB module directly and display its raw pulse waveform in real time. The currently observed packet format yields six 8-bit pulse samples per HID report. The app tracks packet-counter gaps and can send each raw sample over OSC as:
+The launcher checks GitHub for a safe fast-forward update, creates the local Python environment if necessary, installs required dependencies, starts the local service, and opens the browser interface.
 
-    /biofeedback/emwave/pulse_raw
+For manual development use:
 
-The emWave decoding remains explicitly experimental until the packet semantics and sample timing are independently documented.
+    source .venv/bin/activate
+    python -m pip install -r requirements.txt
+    python biofeedback_play.py
+
+The interface opens at:
+
+    http://127.0.0.1:8765
+
+## Design direction
+
+Hardware-specific readers feed a shared device/signal model. Visualization, audio feedback, recording, OSC, future MIDI output, and later experiments consume those signals rather than being hard-coded to one piece of hardware.
+
+Derived physiology remains conservative. Raw signals come first; heart-rate detection, smoothing, calibration, signal quality, spectral analysis, and other derived measurements should remain explicit layers rather than silently changing source data.
