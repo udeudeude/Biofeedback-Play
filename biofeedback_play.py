@@ -561,6 +561,21 @@ class BiofeedbackState:
         self.emwave_thread = threading.Thread(target=self._emwave_reader_loop, daemon=True)
         self.emwave_thread.start()
 
+        settings = load_settings()
+        self.muse_running = True
+        self.muse_connected = False
+        self.muse_last_error = ""
+        self.muse_port = str(settings.get("muse_port") or "")
+        self.muse_version = ""
+        self.muse_afe_gain = None
+        self.muse_battery = None
+        self.muse_eeg_seq = 0
+        self.muse_accel_seq = 0
+        self.muse_eeg_samples = deque(maxlen=12000)
+        self.muse_accel_samples = deque(maxlen=4000)
+        self.muse_thread = threading.Thread(target=self._muse_reader_loop, daemon=True)
+        self.muse_thread.start()
+
     def set_running(self, value: bool) -> None:
         with self.lock:
             self.running = bool(value)
@@ -573,11 +588,28 @@ class BiofeedbackState:
             if not self.emwave_running:
                 self.emwave_connected = False
 
+    def set_muse_running(self, value: bool) -> None:
+        with self.lock:
+            self.muse_running = bool(value)
+            if not self.muse_running:
+                self.muse_connected = False
+
+    def set_muse_port(self, port: str) -> None:
+        with self.lock:
+            self.muse_port = str(port or "")
+            self.muse_connected = False
+            self.muse_last_error = ""
+        settings = load_settings()
+        settings["muse_port"] = self.muse_port
+        save_settings(settings)
+
     def set_device_running(self, device_id: str, value: bool) -> None:
         if device_id == "lightstone":
             self.set_running(value)
         elif device_id == "emwave":
             self.set_emwave_running(value)
+        elif device_id == "muse":
+            self.set_muse_running(value)
         else:
             raise ValueError(f"Unknown device: {device_id}")
 
@@ -650,6 +682,15 @@ class BiofeedbackState:
                 "emwave_sample_count": self.emwave_seq,
                 "emwave_packet_count": self.emwave_packet_count,
                 "emwave_gap_count": self.emwave_gap_count,
+                "muse_running": self.muse_running,
+                "muse_connected": self.muse_connected,
+                "muse_last_error": self.muse_last_error,
+                "muse_port": self.muse_port,
+                "muse_version": self.muse_version,
+                "muse_afe_gain": self.muse_afe_gain,
+                "muse_battery": self.muse_battery,
+                "muse_eeg_sample_count": self.muse_eeg_seq,
+                "muse_accel_sample_count": self.muse_accel_seq,
             }
 
     def device_catalog(self) -> list[dict]:
@@ -668,6 +709,18 @@ class BiofeedbackState:
                     "sample_count": self.emwave_seq,
                     "packet_count": self.emwave_packet_count,
                     "packet_gaps": self.emwave_gap_count,
+                },
+                "muse": {
+                    "connected": self.muse_connected,
+                    "running": self.muse_running,
+                    "error": self.muse_last_error,
+                    "sample_count": self.muse_eeg_seq,
+                    "eeg_sample_count": self.muse_eeg_seq,
+                    "accel_sample_count": self.muse_accel_seq,
+                    "port": self.muse_port,
+                    "version": self.muse_version,
+                    "afe_gain": self.muse_afe_gain,
+                    "battery": self.muse_battery,
                 },
             }
             out = []
@@ -713,6 +766,15 @@ class BiofeedbackState:
                 source = [
                     sample for sample in self.emwave_samples if sample["seq"] > seq
                 ][-1500:]
+            elif definition["device_id"] == "muse":
+                if signal_id.startswith("muse.eeg."):
+                    source = [
+                        sample for sample in self.muse_eeg_samples if sample["seq"] > seq
+                    ][-1500:]
+                else:
+                    source = [
+                        sample for sample in self.muse_accel_samples if sample["seq"] > seq
+                    ][-800:]
             else:
                 source = []
 
@@ -734,6 +796,94 @@ class BiofeedbackState:
             return [
                 sample for sample in self.emwave_samples if sample["seq"] > seq
             ][-1200:]
+
+
+    def _store_muse_eeg(self, decoded: dict) -> None:
+        values = decoded["microvolts"]
+        now_unix = time.time()
+        elapsed = time.monotonic() - self.started_monotonic
+        keys = ("tp9", "fp1", "fp2", "tp10")
+        osc_paths = (
+            "/biofeedback/muse/eeg/tp9",
+            "/biofeedback/muse/eeg/fp1",
+            "/biofeedback/muse/eeg/fp2",
+            "/biofeedback/muse/eeg/tp10",
+        )
+
+        with self.lock:
+            self.muse_eeg_seq += 1
+            sample = {"seq": self.muse_eeg_seq, "t": elapsed}
+            for key, value in zip(keys, values):
+                sample[key] = float(value)
+            self.muse_eeg_samples.append(sample)
+
+            if self.recording and self.recording_writer:
+                for key, value in zip(keys, values):
+                    self.recording_writer.writerow(
+                        [
+                            f"{now_unix:.6f}",
+                            f"{elapsed:.6f}",
+                            "muse",
+                            f"muse.eeg.{key}",
+                            float(value),
+                        ]
+                    )
+                if self.muse_eeg_seq % 100 == 0 and self.recording_file:
+                    self.recording_file.flush()
+
+            if self.osc_enabled:
+                target = (self.osc_host, self.osc_port)
+                try:
+                    for path, value in zip(osc_paths, values):
+                        self.osc_socket.sendto(osc_message(path, float(value)), target)
+                except OSError as exc:
+                    self.muse_last_error = "OSC: " + str(exc)
+
+    def _store_muse_accel(self, values: tuple[int, int, int]) -> None:
+        now_unix = time.time()
+        elapsed = time.monotonic() - self.started_monotonic
+        keys = ("x", "y", "z")
+        osc_paths = (
+            "/biofeedback/muse/accel/x",
+            "/biofeedback/muse/accel/y",
+            "/biofeedback/muse/accel/z",
+        )
+
+        with self.lock:
+            self.muse_accel_seq += 1
+            sample = {"seq": self.muse_accel_seq, "t": elapsed}
+            for key, value in zip(keys, values):
+                sample[key] = int(value)
+            self.muse_accel_samples.append(sample)
+
+            if self.recording and self.recording_writer:
+                for key, value in zip(keys, values):
+                    self.recording_writer.writerow(
+                        [
+                            f"{now_unix:.6f}",
+                            f"{elapsed:.6f}",
+                            "muse",
+                            f"muse.accel.{key}",
+                            int(value),
+                        ]
+                    )
+
+            if self.osc_enabled:
+                target = (self.osc_host, self.osc_port)
+                try:
+                    for path, value in zip(osc_paths, values):
+                        self.osc_socket.sendto(osc_message(path, int(value)), target)
+                except OSError as exc:
+                    self.muse_last_error = "OSC: " + str(exc)
+
+    def _store_muse_battery(self, battery: dict) -> None:
+        with self.lock:
+            self.muse_battery = battery
+
+    def _store_muse_status(self, status) -> None:
+        with self.lock:
+            self.muse_version = status.version
+            self.muse_afe_gain = status.afe_gain
 
     def _store_emwave_packet(self, parsed: dict) -> None:
         packet_time = time.monotonic() - self.started_monotonic
@@ -884,6 +1034,51 @@ class BiofeedbackState:
                 device.close()
             except Exception:
                 pass
+
+
+    def _muse_reader_loop(self) -> None:
+        while not self.shutdown:
+            with self.lock:
+                should_run = self.muse_running
+                port = self.muse_port
+
+            if not should_run or not port:
+                with self.lock:
+                    self.muse_connected = False
+                time.sleep(0.5)
+                continue
+
+            client = Muse2014SerialClient(
+                port=port,
+                on_eeg=self._store_muse_eeg,
+                on_accelerometer=self._store_muse_accel,
+                on_battery=self._store_muse_battery,
+                on_status=self._store_muse_status,
+            )
+
+            try:
+                client.open_and_configure()
+                with self.lock:
+                    if port != self.muse_port:
+                        client.close()
+                        continue
+                    self.muse_connected = True
+                    self.muse_last_error = ""
+
+                client.run(
+                    lambda: self.shutdown
+                    or (not self.muse_running)
+                    or (self.muse_port != port)
+                )
+            except Exception as exc:
+                with self.lock:
+                    self.muse_connected = False
+                    self.muse_last_error = str(exc)
+                time.sleep(1.0)
+            finally:
+                client.close()
+                with self.lock:
+                    self.muse_connected = False
 
     def _emwave_reader_loop(self) -> None:
         device = None
