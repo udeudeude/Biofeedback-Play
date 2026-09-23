@@ -41,6 +41,11 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertTrue(hidden)
         self.assertIn("keyboard", reason.lower())
 
+    def test_touchbar_user_device_is_hidden(self):
+        hidden, reason = hid_is_obviously_unrelated("", "TouchBarUserDevice")
+        self.assertTrue(hidden)
+        self.assertIn("touch bar", reason.lower())
+
     def test_unknown_device_remains_visible(self):
         hidden, reason = hid_is_obviously_unrelated(
             "Unknown Maker", "Experimental Sensor Interface"
