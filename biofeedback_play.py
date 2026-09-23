@@ -19,6 +19,14 @@ from pathlib import Path
 
 import hid
 
+from devices.muse2014 import (
+    CHANNEL_NAMES as MUSE_CHANNEL_NAMES,
+    MUSE_ACCEL_RATE,
+    MUSE_EEG_RATE,
+    Muse2014SerialClient,
+    list_muse_serial_ports,
+)
+
 
 VENDOR_ID = 0x14FA
 PRODUCT_ID = 0x0001
@@ -33,6 +41,18 @@ RECORDINGS = ROOT / "recordings"
 RECORDINGS.mkdir(exist_ok=True)
 CAPTURES = ROOT / "captures"
 CAPTURES.mkdir(exist_ok=True)
+SETTINGS_PATH = ROOT / "settings.json"
+
+
+def load_settings() -> dict:
+    try:
+        return json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_settings(settings: dict) -> None:
+    SETTINGS_PATH.write_text(json.dumps(settings, indent=2), encoding="utf-8")
 
 DEVICE_DEFINITIONS = {
     "lightstone": {
@@ -48,6 +68,13 @@ DEVICE_DEFINITIONS = {
         "transport": "USB HID",
         "usb_id": "0e30:0002",
         "summary": "Ear-clip optical pulse sensor with a directly readable raw waveform.",
+    },
+    "muse": {
+        "name": "InteraXon Muse 2014",
+        "manufacturer": "InteraXon",
+        "transport": "Bluetooth RFCOMM / serial",
+        "usb_id": "not applicable",
+        "summary": "MU-01 EEG headband with four EEG channels, accelerometer, and battery telemetry.",
     },
 }
 
@@ -96,6 +123,91 @@ SIGNAL_DEFINITIONS = {
         "osc": "/biofeedback/emwave/pulse_raw",
         "nominal_rate": EMWAVE_NOMINAL_SAMPLE_RATE,
         "value_key": "pulse",
+    },
+
+    "muse.eeg.tp9": {
+        "device_id": "muse",
+        "name": "EEG TP9",
+        "short_name": "TP9",
+        "data_label": "Experimental EEG channel",
+        "unit": "µV, experimental scaling",
+        "description": "Left temporal Muse EEG channel. Microvolt scaling follows the clean-room MU-01 implementation and is not treated as calibrated.",
+        "audio": "Pitch follows the recent EEG level. This is a sonification, not an audible representation of brain activity.",
+        "osc": "/biofeedback/muse/eeg/tp9",
+        "nominal_rate": MUSE_EEG_RATE,
+        "value_key": "tp9",
+    },
+    "muse.eeg.fp1": {
+        "device_id": "muse",
+        "name": "EEG FP1",
+        "short_name": "FP1",
+        "data_label": "Experimental EEG channel",
+        "unit": "µV, experimental scaling",
+        "description": "Left frontal Muse EEG channel. Microvolt scaling follows the clean-room MU-01 implementation and is not treated as calibrated.",
+        "audio": "Pitch follows the recent EEG level.",
+        "osc": "/biofeedback/muse/eeg/fp1",
+        "nominal_rate": MUSE_EEG_RATE,
+        "value_key": "fp1",
+    },
+    "muse.eeg.fp2": {
+        "device_id": "muse",
+        "name": "EEG FP2",
+        "short_name": "FP2",
+        "data_label": "Experimental EEG channel",
+        "unit": "µV, experimental scaling",
+        "description": "Right frontal Muse EEG channel. Microvolt scaling follows the clean-room MU-01 implementation and is not treated as calibrated.",
+        "audio": "Pitch follows the recent EEG level.",
+        "osc": "/biofeedback/muse/eeg/fp2",
+        "nominal_rate": MUSE_EEG_RATE,
+        "value_key": "fp2",
+    },
+    "muse.eeg.tp10": {
+        "device_id": "muse",
+        "name": "EEG TP10",
+        "short_name": "TP10",
+        "data_label": "Experimental EEG channel",
+        "unit": "µV, experimental scaling",
+        "description": "Right temporal Muse EEG channel. Microvolt scaling follows the clean-room MU-01 implementation and is not treated as calibrated.",
+        "audio": "Pitch follows the recent EEG level.",
+        "osc": "/biofeedback/muse/eeg/tp10",
+        "nominal_rate": MUSE_EEG_RATE,
+        "value_key": "tp10",
+    },
+    "muse.accel.x": {
+        "device_id": "muse",
+        "name": "Head motion X",
+        "short_name": "Accel X",
+        "data_label": "Accelerometer axis",
+        "unit": "raw signed 10-bit units",
+        "description": "Muse headband accelerometer X axis. Raw signed counts are preserved because physical scaling is not yet independently verified.",
+        "audio": "Pitch follows the recent X-axis motion.",
+        "osc": "/biofeedback/muse/accel/x",
+        "nominal_rate": MUSE_ACCEL_RATE,
+        "value_key": "x",
+    },
+    "muse.accel.y": {
+        "device_id": "muse",
+        "name": "Head motion Y",
+        "short_name": "Accel Y",
+        "data_label": "Accelerometer axis",
+        "unit": "raw signed 10-bit units",
+        "description": "Muse headband accelerometer Y axis. Raw signed counts are preserved because physical scaling is not yet independently verified.",
+        "audio": "Pitch follows the recent Y-axis motion.",
+        "osc": "/biofeedback/muse/accel/y",
+        "nominal_rate": MUSE_ACCEL_RATE,
+        "value_key": "y",
+    },
+    "muse.accel.z": {
+        "device_id": "muse",
+        "name": "Head motion Z",
+        "short_name": "Accel Z",
+        "data_label": "Accelerometer axis",
+        "unit": "raw signed 10-bit units",
+        "description": "Muse headband accelerometer Z axis. Raw signed counts are preserved because physical scaling is not yet independently verified.",
+        "audio": "Pitch follows the recent Z-axis motion.",
+        "osc": "/biofeedback/muse/accel/z",
+        "nominal_rate": MUSE_ACCEL_RATE,
+        "value_key": "z",
     },
 }
 
