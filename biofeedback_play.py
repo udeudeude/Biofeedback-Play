@@ -1462,6 +1462,7 @@ let diagnosticDevice = null;
 let diagnosticText = "";
 let diagnosticDevices = [];
 let musePorts = [];
+let musePortScanStatus = "Not scanned yet.";
 let audioContext = null;
 
 function post(action, extra) {
@@ -1631,6 +1632,14 @@ function renderDeviceSetup(devices) {
       const afe = device.afe_gain != null ? String(device.afe_gain) : "—";
       const version = device.version ? escapeHtml(device.version) : "—";
 
+      const portSummary = musePorts.length
+        ? musePorts.map(function(port) {
+            return '<div class="mono">' + escapeHtml(port.device) +
+              (port.likely_muse ? ' <span class="badge">likely Muse</span>' : '') +
+              '</div>';
+          }).join("")
+        : '<div class="small">No serial ports found in the last scan.</div>';
+
       deviceSpecific =
         '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">' +
           '<div class="label">Muse Bluetooth setup</div>' +
@@ -1643,7 +1652,12 @@ function renderDeviceSetup(devices) {
             '<button id="museScanPorts">Scan serial ports</button>' +
             '<button id="museBluetoothSettings">Open Bluetooth settings</button>' +
           '</div>' +
-          '<div class="device-meta small">' +
+          '<div id="musePortScanStatus" class="small" style="margin-top:10px;padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:#0d1017">' +
+            escapeHtml(musePortScanStatus) +
+          '</div>' +
+          '<div class="device-meta small" style="margin-top:8px">' +
+            '<div><strong>Serial ports found:</strong> ' + musePorts.length + '</div>' +
+            portSummary +
             '<div><strong>Selected port:</strong> <span class="mono">' + escapeHtml(currentPort || "none") + '</span></div>' +
             '<div><strong>Battery:</strong> ' + battery + '</div>' +
             '<div><strong>AFE gain:</strong> ' + afe + '</div>' +
@@ -1710,22 +1724,47 @@ function renderDeviceSetup(devices) {
 
 
 function refreshMusePorts() {
+  musePortScanStatus = "Scanning macOS serial ports...";
+  renderDeviceSetup(catalog.devices);
+
   return fetch("/api/muse_ports")
-    .then(r => r.json())
+    .then(function(r) {
+      if (!r.ok) throw new Error("Serial-port scan failed: HTTP " + r.status);
+      return r.json();
+    })
     .then(function(data) {
       musePorts = data.ports || [];
+      const likely = musePorts.filter(function(port) { return port.likely_muse; });
 
-      if (!data.current) {
-        const likely = musePorts.filter(function(port) { return port.likely_muse; });
-        if (likely.length === 1) {
-          return post("muse_set_port", {port: likely[0].device})
-            .then(refreshAll);
-        }
+      if (!data.current && likely.length === 1) {
+        musePortScanStatus =
+          "Found " + musePorts.length + " serial port(s). One looks like a Muse, so Biofeedback Play selected it automatically.";
+        return post("muse_set_port", {port: likely[0].device})
+          .then(function() {
+            return refreshAll().then(function() {
+              renderDeviceSetup(catalog.devices);
+            });
+          });
+      }
+
+      if (!musePorts.length) {
+        musePortScanStatus =
+          "Scan complete: no macOS serial ports were found. If the Muse is paired, this likely means macOS did not create an RFCOMM serial port for it.";
+      } else if (likely.length) {
+        musePortScanStatus =
+          "Scan complete: found " + musePorts.length + " serial port(s), including " +
+          likely.length + " likely Muse port(s).";
+      } else {
+        musePortScanStatus =
+          "Scan complete: found " + musePorts.length +
+          " serial port(s), but none are named like a Muse. You can still select one manually if you recognize it.";
       }
 
       renderDeviceSetup(catalog.devices);
     })
     .catch(function(err) {
+      musePortScanStatus = "Serial-port scan failed: " + String(err);
+      renderDeviceSetup(catalog.devices);
       document.getElementById("error").textContent = String(err);
     });
 }
