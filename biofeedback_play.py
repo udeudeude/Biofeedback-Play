@@ -853,101 +853,167 @@ HTML = r"""<!doctype html>
   --line: #343b4e;
   --good: #59d185;
   --bad: #ff6b6b;
-  --skin: #7dd3fc;
-  --pulse: #f9a8d4;
-  --accent: #c4b5fd;
+  --accent: #8b7cf6;
+  --accent2: #c4b5fd;
+  --soft: rgba(255,255,255,.035);
 }
 * { box-sizing: border-box; }
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: radial-gradient(circle at 20% 0%, #161a25, var(--bg) 42%);
+  background: radial-gradient(circle at 20% 0%, #171b27, var(--bg) 44%);
   color: var(--text);
 }
-main { max-width: 1180px; margin: 0 auto; padding: 28px 22px 50px; }
-h1 { margin: 0; font-size: 30px; font-weight: 700; letter-spacing: -0.03em; }
-.subtitle { margin-top: 6px; color: var(--muted); }
+main { max-width: 1180px; margin: 0 auto; padding: 26px 22px 52px; }
+h1 { margin: 0; font-size: 30px; font-weight: 720; letter-spacing: -.03em; }
+h2 { margin: 0; font-size: 18px; }
+.subtitle { margin-top: 5px; color: var(--muted); }
 .topbar {
-  display: flex; gap: 14px; justify-content: space-between; align-items: center;
-  margin-bottom: 22px; flex-wrap: wrap;
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 14px; flex-wrap: wrap; margin-bottom: 18px;
 }
-.status {
+.status-pill {
   display: inline-flex; align-items: center; gap: 8px;
-  padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px;
-  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--line); border-radius: 999px;
+  padding: 8px 12px; background: var(--soft); font-size: 13px;
 }
-.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); }
-.dot.on { background: var(--good); box-shadow: 0 0 12px rgba(89,209,133,.55); }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); flex: 0 0 auto; }
+.dot.on { background: var(--good); box-shadow: 0 0 12px rgba(89,209,133,.45); }
+.tabs {
+  display: flex; gap: 8px; padding: 5px; margin-bottom: 16px;
+  border: 1px solid var(--line); border-radius: 13px;
+  background: rgba(21,24,33,.72); width: fit-content;
+}
+.tab-button {
+  border: 0; border-radius: 9px; padding: 9px 15px;
+  color: var(--muted); background: transparent; cursor: pointer; font: inherit;
+}
+.tab-button.active { color: var(--text); background: var(--panel2); }
+.tab-page { display: none; }
+.tab-page.active { display: block; }
 .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; }
-.card {
-  background: rgba(21,24,33,.88);
+.card, .signal-panel {
   border: 1px solid var(--line);
   border-radius: 15px;
-  padding: 16px;
-  box-shadow: 0 12px 35px rgba(0,0,0,.18);
+  background: rgba(21,24,33,.9);
+  box-shadow: 0 12px 35px rgba(0,0,0,.15);
 }
-.metric { grid-column: span 3; min-height: 112px; }
-.controls { grid-column: span 6; }
-.osc { grid-column: span 6; }
-.chart { grid-column: span 12; }
-.diagnostics { grid-column: span 12; }
-.device-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
-.device-table th { color: var(--muted); font-weight: 600; text-align: left; border-bottom: 1px solid var(--line); padding: 8px 7px; }
-.device-table td { border-bottom: 1px solid rgba(52,59,78,.6); padding: 8px 7px; vertical-align: top; }
-.device-table tr.selected { background: rgba(196,181,253,.09); }
-.device-table code { color: #d8dce7; }
-.diag-output {
-  white-space: pre-wrap; word-break: break-word; margin: 12px 0 0;
-  max-height: 330px; overflow: auto; padding: 12px;
-  background: #090c12; border: 1px solid var(--line); border-radius: 10px;
-  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+.card { padding: 16px; }
+.full { grid-column: span 12; }
+.half { grid-column: span 6; }
+.third { grid-column: span 4; }
+.row { display: flex; gap: 9px; flex-wrap: wrap; align-items: center; }
+.between { justify-content: space-between; }
+.label {
+  color: var(--muted); font-size: 12px; text-transform: uppercase;
+  letter-spacing: .08em;
 }
-select {
-  font: inherit; color: var(--text); background: #0d1017;
-  border: 1px solid var(--line); border-radius: 9px; padding: 8px 9px;
-}
-.label { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .08em; }
-.value { font-size: 36px; font-variant-numeric: tabular-nums; margin-top: 7px; }
-.unit { color: var(--muted); font-size: 13px; margin-top: 4px; }
-button, input {
-  font: inherit;
-}
+.small { color: var(--muted); font-size: 12px; line-height: 1.48; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+button, input, select { font: inherit; }
 button {
-  border: 1px solid var(--line);
-  color: var(--text);
-  background: var(--panel2);
-  border-radius: 10px;
-  padding: 9px 13px;
-  cursor: pointer;
+  border: 1px solid var(--line); color: var(--text); background: var(--panel2);
+  border-radius: 10px; padding: 9px 13px; cursor: pointer;
 }
-button:hover { border-color: #626b84; }
+button:hover { border-color: #68718a; }
 button.primary { background: #4338ca; border-color: #635bdf; }
-button.recording { background: #8b1e3f; border-color: #c33d65; }
-.row { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; }
-input[type=text], input[type=number] {
-  background: #0d1017;
-  border: 1px solid var(--line);
-  color: var(--text);
-  border-radius: 9px;
-  padding: 8px 9px;
+button.recording { background: #81233f; border-color: #b33c60; }
+button.audio-on { background: #315b46; border-color: #4d8b6b; }
+button:disabled { opacity: .45; cursor: default; }
+input[type=text], input[type=number], select {
+  background: #0d1017; border: 1px solid var(--line); color: var(--text);
+  border-radius: 9px; padding: 8px 9px;
 }
 input.host { width: 150px; }
 input.port { width: 90px; }
-canvas {
-  width: 100%;
-  height: 210px;
-  display: block;
-  margin-top: 10px;
-  border-radius: 10px;
-  background: #0b0e15;
+.session-summary {
+  grid-column: span 12;
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 12px; flex-wrap: wrap;
 }
-.charthead { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
-.range { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-#error { color: #ff9b9b; font-size: 13px; margin-top: 9px; min-height: 18px; }
-.small { color: var(--muted); font-size: 12px; line-height: 1.45; margin-top: 10px; }
-@media (max-width: 760px) {
-  .metric { grid-column: span 6; }
-  .controls, .osc { grid-column: span 12; }
+.signal-grid {
+  display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px;
+  grid-column: span 12;
+}
+.signal-panel { grid-column: span 6; overflow: hidden; }
+.signal-panel-header {
+  display: flex; justify-content: space-between; gap: 12px;
+  align-items: flex-start; padding: 15px 16px;
+}
+.signal-title { margin-top: 4px; font-size: 19px; font-weight: 680; }
+.signal-device { margin-top: 4px; color: var(--muted); font-size: 12px; }
+.signal-body { padding: 0 16px 16px; }
+.signal-panel.offline .signal-body { display: none; }
+.signal-panel.offline { opacity: .72; }
+.signal-panel.offline .signal-panel-header { align-items: center; }
+.signal-status { white-space: nowrap; }
+.metrics {
+  display: grid; grid-template-columns: repeat(4, minmax(0,1fr));
+  gap: 9px; margin: 6px 0 10px;
+}
+.metric {
+  background: #10131b; border: 1px solid rgba(52,59,78,.75);
+  border-radius: 11px; padding: 10px;
+}
+.metric-value {
+  font-size: 23px; font-variant-numeric: tabular-nums;
+  margin-top: 5px; overflow: hidden; text-overflow: ellipsis;
+}
+.signal-info {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px;
+  margin: 10px 0;
+}
+.info-line { font-size: 12px; line-height: 1.45; }
+.info-line strong { color: #dce1ed; font-weight: 600; }
+canvas {
+  width: 100%; height: 190px; display: block;
+  background: #0a0d13; border-radius: 10px; margin-top: 10px;
+}
+.audio-note {
+  margin-top: 9px; padding: 9px 10px; border-radius: 9px;
+  background: rgba(139,124,246,.07); color: var(--muted);
+  font-size: 12px; line-height: 1.45;
+}
+.device-grid {
+  display: grid; grid-template-columns: repeat(12, 1fr); gap: 12px;
+  margin-top: 12px;
+}
+.device-card {
+  grid-column: span 6; padding: 14px;
+  border: 1px solid var(--line); border-radius: 12px; background: #10131b;
+}
+.device-name { font-size: 17px; font-weight: 650; }
+.device-meta { margin-top: 8px; display: grid; gap: 4px; }
+.device-signals { margin-top: 10px; }
+.badge {
+  display: inline-block; border: 1px solid var(--line); border-radius: 999px;
+  padding: 4px 8px; margin: 3px 4px 0 0; color: var(--muted); font-size: 11px;
+}
+.device-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+.device-table th {
+  color: var(--muted); font-weight: 600; text-align: left;
+  border-bottom: 1px solid var(--line); padding: 8px 7px;
+}
+.device-table td {
+  border-bottom: 1px solid rgba(52,59,78,.6); padding: 8px 7px; vertical-align: top;
+}
+.device-table tr.selected { background: rgba(196,181,253,.09); }
+.diag-output {
+  white-space: pre-wrap; word-break: break-word; margin: 12px 0 0;
+  max-height: 340px; overflow: auto; padding: 12px;
+  background: #090c12; border: 1px solid var(--line); border-radius: 10px;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+#error { color: #ff9b9b; font-size: 12px; min-height: 18px; margin-top: 8px; }
+.empty {
+  grid-column: span 12; padding: 24px; border: 1px dashed var(--line);
+  border-radius: 14px; color: var(--muted); text-align: center;
+}
+@media (max-width: 820px) {
+  .signal-panel, .half, .device-card { grid-column: span 12; }
+  .third { grid-column: span 12; }
+  .metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .signal-info { grid-template-columns: 1fr; }
 }
 </style>
 </head>
@@ -956,148 +1022,118 @@ canvas {
   <div class="topbar">
     <div>
       <h1>Biofeedback Play</h1>
-      <div class="subtitle">Wild Divine Lightstone live laboratory</div>
+      <div class="subtitle">Live biosignal visual, audio, recording, and creative-control workspace</div>
     </div>
-    <div class="status"><span id="dot" class="dot"></span><span id="statusText">Connecting…</span></div>
+    <div class="status-pill">
+      <span id="globalDot" class="dot"></span>
+      <span id="globalStatus">Checking devices...</span>
+    </div>
   </div>
 
-  <div class="grid">
-    <section class="card metric">
-      <div class="label">Skin raw</div>
-      <div id="skinValue" class="value">—</div>
-      <div class="unit">conductance channel</div>
-    </section>
-    <section class="card metric">
-      <div class="label">Pulse raw</div>
-      <div id="pulseValue" class="value">—</div>
-      <div class="unit">blood-volume waveform</div>
-    </section>
-    <section class="card metric">
-      <div class="label">Samples</div>
-      <div id="sampleValue" class="value">0</div>
-      <div class="unit">this session</div>
-    </section>
-    <section class="card metric">
-      <div class="label">Recording</div>
-      <div id="recordValue" class="value">OFF</div>
-      <div class="unit">CSV</div>
-    </section>
+  <nav class="tabs" aria-label="Biofeedback Play sections">
+    <button class="tab-button active" data-tab="use">Use devices</button>
+    <button class="tab-button" data-tab="setup">Device setup</button>
+  </nav>
 
-    <section class="card controls">
-      <div class="label">Acquisition & recording</div>
-      <div class="row" style="margin-top:12px">
-        <button id="runBtn" class="primary">Stop acquisition</button>
-        <button id="recordBtn">Start recording</button>
-        <button id="folderBtn">Show recordings</button>
-      </div>
-      <div id="error"></div>
-    </section>
-
-    <section class="card osc">
-      <div class="label">OSC output</div>
-      <div class="row" style="margin-top:12px">
-        <label><input id="oscEnabled" type="checkbox"> Enabled</label>
-        <input id="oscHost" class="host" type="text" value="127.0.0.1" aria-label="OSC host">
-        <input id="oscPort" class="port" type="number" value="57120" aria-label="OSC port">
-        <button id="oscApply">Apply</button>
-      </div>
-      <div class="small">
-        Sends /biofeedback/lightstone/skin_raw, /biofeedback/lightstone/pulse_raw,
-        and /biofeedback/emwave/pulse_raw. Default SuperCollider language port is usually 57120.
-      </div>
-    </section>
-
-
-
-    <section class="card chart">
-      <div class="charthead">
+  <section id="tab-use" class="tab-page active">
+    <div class="grid">
+      <section class="card session-summary">
         <div>
-          <div class="label">HeartMath emWave pulse waveform</div>
-          <div class="small">Experimental direct USB decoding. Each observed HID report carries six 8-bit waveform samples.</div>
+          <div class="label">Session</div>
+          <div id="sessionSummary" style="margin-top:5px">Waiting for connected devices.</div>
         </div>
         <div class="row">
-          <span class="status"><span id="emwaveDot" class="dot"></span><span id="emwaveStatus">Waiting for emWave</span></span>
-          <button id="emwaveRunBtn">Stop emWave</button>
+          <button id="recordBtn">Start recording</button>
+          <button id="folderBtn">Show recordings</button>
         </div>
-      </div>
-      <div class="row" style="margin-top:12px">
-        <div><span class="label">Pulse raw</span> <strong id="emwaveValue">—</strong></div>
-        <div><span class="label">Samples</span> <strong id="emwaveSampleValue">0</strong></div>
-        <div><span class="label">Packet gaps</span> <strong id="emwaveGapValue">0</strong></div>
-      </div>
-      <canvas id="emwaveChart"></canvas>
-    </section>
+      </section>
 
-    <section class="card diagnostics">
-      <div class="charthead">
-        <div>
-          <div class="label">Devices & diagnostics</div>
-          <div class="small">Scan USB HID hardware, test access, and make short raw captures without Terminal.</div>
+      <div id="signalGrid" class="signal-grid"></div>
+    </div>
+  </section>
+
+  <section id="tab-setup" class="tab-page">
+    <div class="grid">
+      <section class="card full">
+        <div class="row between">
+          <div>
+            <div class="label">Configured devices</div>
+            <div class="small" style="margin-top:6px">
+              Connection and acquisition controls live here. Signal panels stay on the Use devices tab.
+            </div>
+          </div>
         </div>
-        <div class="row">
-          <label class="small" style="margin-top:0">
-            <input id="showAllDevices" type="checkbox">
-            Show obviously unrelated HID devices
-          </label>
-          <button id="scanBtn">Scan devices</button>
+        <div id="deviceSetupGrid" class="device-grid"></div>
+        <div id="error"></div>
+      </section>
+
+      <section class="card half">
+        <div class="label">OSC output</div>
+        <div class="small" style="margin-top:6px">
+          Sends each live signal on its panel's OSC address for SuperCollider and other software.
         </div>
-      </div>
-
-      <div id="deviceList"></div>
-
-      <div class="row" style="margin-top:12px">
-        <strong id="selectedDevice">No device selected</strong>
-        <select id="captureSeconds" aria-label="Capture duration">
-          <option value="2">2 second capture</option>
-          <option value="5" selected>5 second capture</option>
-          <option value="10">10 second capture</option>
-        </select>
-        <button id="testDeviceBtn">Test open</button>
-        <button id="captureDeviceBtn" class="primary">Capture raw reports</button>
-        <button id="copyDiagBtn">Copy report</button>
-        <button id="captureFolderBtn">Show captures</button>
-      </div>
-
-      <pre id="diagOutput" class="diag-output">Scan, select a device, then test or capture it.</pre>
-    </section>
-
-    <section class="card chart">
-      <div class="charthead">
-        <div>
-          <div class="label">Skin conductance</div>
-          <div class="small">Raw Lightstone channel. Disconnecting either skin electrode drives this toward zero.</div>
+        <div class="row" style="margin-top:12px">
+          <label><input id="oscEnabled" type="checkbox"> Enabled</label>
+          <input id="oscHost" class="host" type="text" value="127.0.0.1" aria-label="OSC host">
+          <input id="oscPort" class="port" type="number" value="57120" aria-label="OSC port">
+          <button id="oscApply">Apply</button>
         </div>
-        <div id="skinRange" class="range"></div>
-      </div>
-      <canvas id="skinChart"></canvas>
-    </section>
+      </section>
 
-    <section class="card chart">
-      <div class="charthead">
-        <div>
-          <div class="label">Pulse waveform</div>
-          <div class="small">Raw optical blood-volume waveform. Heart-rate derivation will be layered on top later.</div>
+      <section class="card half">
+        <div class="label">About audio feedback</div>
+        <div class="small" style="margin-top:6px">
+          Each signal panel has its own Audio button. Audio is generated locally in the browser.
+          It is a sonification of the incoming signal, not a reconstructed heartbeat or diagnostic sound.
         </div>
-        <div id="pulseRange" class="range"></div>
-      </div>
-      <canvas id="pulseChart"></canvas>
-    </section>
-  </div>
+      </section>
+
+      <section class="card full">
+        <div class="row between">
+          <div>
+            <div class="label">Devices & diagnostics</div>
+            <div class="small" style="margin-top:6px">
+              Scan HID hardware, inspect unknown devices, test access, and make raw captures without Terminal.
+            </div>
+          </div>
+          <div class="row">
+            <label class="small">
+              <input id="showAllDevices" type="checkbox">
+              Show obviously unrelated HID devices
+            </label>
+            <button id="scanBtn">Scan devices</button>
+          </div>
+        </div>
+
+        <div id="deviceList"></div>
+
+        <div class="row" style="margin-top:12px">
+          <strong id="selectedDevice">No device selected</strong>
+          <select id="captureSeconds" aria-label="Capture duration">
+            <option value="2">2 second capture</option>
+            <option value="5" selected>5 second capture</option>
+            <option value="10">10 second capture</option>
+          </select>
+          <button id="testDeviceBtn">Test open</button>
+          <button id="captureDeviceBtn" class="primary">Capture raw reports</button>
+          <button id="copyDiagBtn">Copy report</button>
+          <button id="captureFolderBtn">Show captures</button>
+        </div>
+        <pre id="diagOutput" class="diag-output">Scan, select a device, then test or capture it.</pre>
+      </section>
+    </div>
+  </section>
 </main>
 
 <script>
-let lastSeq = 0;
-let totalSamples = 0;
-const skin = [];
-const pulse = [];
-let emwaveLastSeq = 0;
-const emwavePulse = [];
-const maxPoints = 620;
-const emwaveMaxPoints = 1500;
-
-function trim(a) {
-  if (a.length > maxPoints) a.splice(0, a.length - maxPoints);
-}
+let catalog = {devices: [], signals: []};
+let runtimeStatus = {};
+let signalSignature = "";
+const signalState = {};
+let diagnosticDevice = null;
+let diagnosticText = "";
+let diagnosticDevices = [];
+let audioContext = null;
 
 function post(action, extra) {
   const body = Object.assign({action: action}, extra || {});
@@ -1106,6 +1142,234 @@ function post(action, extra) {
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(body)
   }).then(r => r.json());
+}
+
+function domId(value) {
+  return String(value).replace(/[^A-Za-z0-9_-]/g, "_");
+}
+
+function escapeHtml(value) {
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function switchTab(name) {
+  document.querySelectorAll(".tab-button").forEach(function(button) {
+    button.classList.toggle("active", button.dataset.tab === name);
+  });
+  document.querySelectorAll(".tab-page").forEach(function(page) {
+    page.classList.toggle("active", page.id === "tab-" + name);
+  });
+  if (name === "use") {
+    requestAnimationFrame(drawAllSignals);
+  }
+}
+
+document.querySelectorAll(".tab-button").forEach(function(button) {
+  button.onclick = function() { switchTab(button.dataset.tab); };
+});
+
+function ensureSignalState(signal) {
+  if (!signalState[signal.id]) {
+    signalState[signal.id] = {
+      seq: 0,
+      values: [],
+      times: [],
+      audioOn: false,
+      audioNode: null
+    };
+  }
+  return signalState[signal.id];
+}
+
+function renderSignalPanels(signals) {
+  const grid = document.getElementById("signalGrid");
+  if (!signals.length) {
+    grid.innerHTML = '<div class="empty">No signal definitions are configured yet.</div>';
+    return;
+  }
+
+  grid.innerHTML = signals.map(function(signal) {
+    ensureSignalState(signal);
+    const id = domId(signal.id);
+    return (
+      '<article id="panel_' + id + '" class="signal-panel offline">' +
+        '<div class="signal-panel-header">' +
+          '<div>' +
+            '<div class="label">' + escapeHtml(signal.data_label) + '</div>' +
+            '<div class="signal-title">' + escapeHtml(signal.name) + '</div>' +
+            '<div class="signal-device">Device: ' + escapeHtml(signal.device_name) + '</div>' +
+          '</div>' +
+          '<div class="row">' +
+            '<span class="status-pill signal-status"><span id="dot_' + id + '" class="dot"></span>' +
+              '<span id="status_' + id + '">Not connected</span></span>' +
+            '<button id="audio_' + id + '" disabled>Audio off</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="signal-body">' +
+          '<div class="metrics">' +
+            '<div class="metric"><div class="label">Current</div><div id="current_' + id + '" class="metric-value">-</div></div>' +
+            '<div class="metric"><div class="label">Recent low</div><div id="min_' + id + '" class="metric-value">-</div></div>' +
+            '<div class="metric"><div class="label">Recent high</div><div id="max_' + id + '" class="metric-value">-</div></div>' +
+            '<div class="metric"><div class="label">Samples</div><div id="count_' + id + '" class="metric-value">0</div></div>' +
+          '</div>' +
+          '<div class="signal-info">' +
+            '<div class="info-line"><strong>Displayed:</strong> ' + escapeHtml(signal.description) + '</div>' +
+            '<div class="info-line"><strong>Units:</strong> ' + escapeHtml(signal.unit) + '</div>' +
+            '<div class="info-line"><strong>OSC:</strong> <span class="mono">' + escapeHtml(signal.osc) + '</span></div>' +
+            '<div class="info-line"><strong>Rate:</strong> ' +
+              (signal.nominal_rate ? escapeHtml(signal.nominal_rate + " Hz nominal") : "device stream rate, not yet characterized") +
+            '</div>' +
+            '<div id="extra_' + id + '" class="info-line"></div>' +
+          '</div>' +
+          '<canvas id="canvas_' + id + '"></canvas>' +
+          '<div class="audio-note"><strong>Audio mapping:</strong> ' + escapeHtml(signal.audio) +
+            ' Audio is intentionally quiet and can be enabled independently for this panel.</div>' +
+        '</div>' +
+      '</article>'
+    );
+  }).join("");
+
+  signals.forEach(function(signal) {
+    const id = domId(signal.id);
+    document.getElementById("audio_" + id).onclick = function() {
+      toggleAudio(signal.id);
+    };
+  });
+}
+
+function updateSignalPanels(signals) {
+  signals.forEach(function(signal) {
+    const id = domId(signal.id);
+    const panel = document.getElementById("panel_" + id);
+    if (!panel) return;
+
+    const live = Boolean(signal.connected && signal.running);
+    panel.classList.toggle("offline", !live);
+    document.getElementById("dot_" + id).className = live ? "dot on" : "dot";
+    document.getElementById("status_" + id).textContent =
+      !signal.running ? "Acquisition stopped" :
+      signal.connected ? "Live" : "Not connected";
+
+    const audioButton = document.getElementById("audio_" + id);
+    audioButton.disabled = !live;
+    const state = ensureSignalState(signal);
+    if (!live && state.audioOn) stopAudio(signal.id);
+    audioButton.textContent = state.audioOn ? "Audio on" : "Audio off";
+    audioButton.className = state.audioOn ? "audio-on" : "";
+
+    document.getElementById("count_" + id).textContent =
+      Number(signal.sample_count || 0).toLocaleString();
+
+    const extra = document.getElementById("extra_" + id);
+    if (signal.packet_gaps != null) {
+      extra.innerHTML = '<strong>Packet gaps:</strong> ' + escapeHtml(signal.packet_gaps);
+    } else {
+      extra.textContent = "";
+    }
+  });
+}
+
+function renderDeviceSetup(devices) {
+  const host = document.getElementById("deviceSetupGrid");
+  host.innerHTML = devices.map(function(device) {
+    const statusText = !device.running ? "Acquisition stopped" :
+      device.connected ? "Connected and live" : "Waiting for device";
+    const statusClass = device.connected && device.running ? "dot on" : "dot";
+    const signals = (device.signals || []).map(function(signalId) {
+      const signal = catalog.signals.find(function(s) { return s.id === signalId; });
+      return '<span class="badge">' + escapeHtml(signal ? signal.name : signalId) + '</span>';
+    }).join("");
+
+    return (
+      '<div class="device-card">' +
+        '<div class="row between">' +
+          '<div>' +
+            '<div class="device-name">' + escapeHtml(device.name) + '</div>' +
+            '<div class="small">' + escapeHtml(device.summary) + '</div>' +
+          '</div>' +
+          '<span class="status-pill"><span class="' + statusClass + '"></span>' + escapeHtml(statusText) + '</span>' +
+        '</div>' +
+        '<div class="device-meta small">' +
+          '<div><strong>Manufacturer:</strong> ' + escapeHtml(device.manufacturer) + '</div>' +
+          '<div><strong>Transport:</strong> ' + escapeHtml(device.transport) + '</div>' +
+          '<div><strong>USB:</strong> <span class="mono">' + escapeHtml(device.usb_id) + '</span></div>' +
+          '<div><strong>Samples received:</strong> ' + Number(device.sample_count || 0).toLocaleString() + '</div>' +
+          (device.packet_gaps != null ? '<div><strong>Packet gaps:</strong> ' + escapeHtml(device.packet_gaps) + '</div>' : '') +
+          (device.error ? '<div style="color:#ff9b9b"><strong>Error:</strong> ' + escapeHtml(device.error) + '</div>' : '') +
+        '</div>' +
+        '<div class="device-signals">' + signals + '</div>' +
+        '<div style="margin-top:12px">' +
+          '<button data-device-toggle="' + escapeHtml(device.id) + '">' +
+            (device.running ? "Stop acquisition" : "Start acquisition") +
+          '</button>' +
+        '</div>' +
+      '</div>'
+    );
+  }).join("");
+
+  host.querySelectorAll("[data-device-toggle]").forEach(function(button) {
+    button.onclick = function() {
+      const device = catalog.devices.find(function(d) {
+        return d.id === button.dataset.deviceToggle;
+      });
+      if (!device) return;
+      post(device.running ? "device_stop" : "device_start", {device_id: device.id})
+        .then(refreshAll);
+    };
+  });
+}
+
+function updateGlobalStatus() {
+  const connected = catalog.devices.filter(function(d) { return d.connected && d.running; });
+  const liveSignals = catalog.signals.filter(function(s) { return s.connected && s.running; });
+  const dot = document.getElementById("globalDot");
+  dot.className = connected.length ? "dot on" : "dot";
+  document.getElementById("globalStatus").textContent =
+    connected.length + " device" + (connected.length === 1 ? "" : "s") +
+    " connected · " + liveSignals.length + " live signal" + (liveSignals.length === 1 ? "" : "s");
+
+  document.getElementById("sessionSummary").textContent = liveSignals.length
+    ? liveSignals.map(function(s) { return s.device_name + ": " + s.name; }).join(" · ")
+    : "No configured device is currently connected.";
+}
+
+function applyCatalog(data) {
+  catalog = data;
+  const signature = catalog.signals.map(function(s) { return s.id; }).join("|");
+  if (signature !== signalSignature) {
+    signalSignature = signature;
+    renderSignalPanels(catalog.signals);
+  }
+  updateSignalPanels(catalog.signals);
+  renderDeviceSetup(catalog.devices);
+  updateGlobalStatus();
+}
+
+function refreshAll() {
+  return Promise.all([
+    fetch("/api/catalog").then(r => r.json()),
+    fetch("/api/status").then(r => r.json())
+  ]).then(function(results) {
+    applyCatalog(results[0]);
+    runtimeStatus = results[1];
+
+    const record = document.getElementById("recordBtn");
+    record.textContent = runtimeStatus.recording ? "Stop recording" : "Start recording";
+    record.className = runtimeStatus.recording ? "recording" : "";
+
+    document.getElementById("oscEnabled").checked = Boolean(runtimeStatus.osc_enabled);
+    document.getElementById("oscHost").value = runtimeStatus.osc_host || "127.0.0.1";
+    document.getElementById("oscPort").value = runtimeStatus.osc_port || 57120;
+
+    const errors = catalog.devices.map(function(d) { return d.error; }).filter(Boolean);
+    document.getElementById("error").textContent = errors.join(" · ");
+  }).catch(function(err) {
+    document.getElementById("error").textContent = String(err);
+  });
 }
 
 function fitCanvas(canvas) {
@@ -1120,61 +1384,162 @@ function fitCanvas(canvas) {
   return {w: w, h: h, ratio: ratio};
 }
 
-function draw(canvas, values, stroke, rangeEl) {
+function drawSignal(signal) {
+  const state = ensureSignalState(signal);
+  const canvas = document.getElementById("canvas_" + domId(signal.id));
+  if (!canvas) return;
   const size = fitCanvas(canvas);
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, size.w, size.h);
 
-  ctx.strokeStyle = "#1f2634";
-  ctx.lineWidth = 1 * size.ratio;
+  ctx.strokeStyle = "#202635";
+  ctx.lineWidth = size.ratio;
   for (let i = 1; i < 4; i++) {
     const y = size.h * i / 4;
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(size.w, y);
-    ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(size.w, y); ctx.stroke();
   }
 
-  if (values.length < 2) return;
+  if (state.values.length < 2) return;
+  let min = Math.min.apply(null, state.values);
+  let max = Math.max.apply(null, state.values);
+  if (max === min) { min -= 1; max += 1; }
+  const padding = (max - min) * .08;
+  min -= padding; max += padding;
 
-  let min = Math.min.apply(null, values);
-  let max = Math.max.apply(null, values);
-  if (max === min) {
-    max += 1;
-    min -= 1;
-  }
-  const pad = (max - min) * 0.08;
-  min -= pad;
-  max += pad;
-
-  rangeEl.textContent = Math.round(min) + " – " + Math.round(max);
-
-  ctx.strokeStyle = stroke;
-  ctx.lineWidth = 1.6 * size.ratio;
+  ctx.strokeStyle = "#c4b5fd";
+  ctx.lineWidth = 1.55 * size.ratio;
   ctx.lineJoin = "round";
   ctx.beginPath();
-
-  values.forEach(function(v, i) {
-    const x = i * size.w / Math.max(1, values.length - 1);
-    const y = size.h - ((v - min) / (max - min)) * size.h;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+  state.values.forEach(function(value, index) {
+    const x = index * size.w / Math.max(1, state.values.length - 1);
+    const y = size.h - ((value - min) / (max - min)) * size.h;
+    if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   });
   ctx.stroke();
 }
 
-
-let diagnosticDevice = null;
-let diagnosticText = "";
-let diagnosticDevices = [];
-
-function escapeHtml(value) {
-  return String(value == null ? "" : value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+function drawAllSignals() {
+  catalog.signals.forEach(drawSignal);
 }
+
+function updateSignalNumbers(signal) {
+  const state = ensureSignalState(signal);
+  if (!state.values.length) return;
+  const id = domId(signal.id);
+  const recent = state.values.slice(-400);
+  const current = recent[recent.length - 1];
+  const min = Math.min.apply(null, recent);
+  const max = Math.max.apply(null, recent);
+  document.getElementById("current_" + id).textContent = current;
+  document.getElementById("min_" + id).textContent = min;
+  document.getElementById("max_" + id).textContent = max;
+  updateAudio(signal);
+}
+
+function pollSignals() {
+  catalog.signals.forEach(function(signal) {
+    if (!(signal.connected && signal.running)) return;
+    const state = ensureSignalState(signal);
+    fetch("/api/signal_samples?id=" + encodeURIComponent(signal.id) + "&after=" + state.seq)
+      .then(r => r.json())
+      .then(function(data) {
+        (data.samples || []).forEach(function(sample) {
+          state.seq = Math.max(state.seq, sample.seq);
+          state.values.push(sample.value);
+          state.times.push(sample.t);
+        });
+        const maxPoints = signal.nominal_rate ? 1500 : 700;
+        if (state.values.length > maxPoints) {
+          state.values.splice(0, state.values.length - maxPoints);
+          state.times.splice(0, state.times.length - maxPoints);
+        }
+        if ((data.samples || []).length) {
+          updateSignalNumbers(signal);
+          drawSignal(signal);
+        }
+      })
+      .catch(function(err) {
+        document.getElementById("error").textContent = String(err);
+      });
+  });
+}
+
+function getAudioContext() {
+  if (!audioContext) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    audioContext = new AudioContextClass();
+  }
+  return audioContext;
+}
+
+function toggleAudio(signalId) {
+  const signal = catalog.signals.find(function(s) { return s.id === signalId; });
+  if (!signal || !(signal.connected && signal.running)) return;
+  const state = ensureSignalState(signal);
+  if (state.audioOn) {
+    stopAudio(signalId);
+    return;
+  }
+
+  const ctx = getAudioContext();
+  ctx.resume();
+  const oscillator = ctx.createOscillator();
+  const gain = ctx.createGain();
+  oscillator.type = signalId.indexOf("skin") >= 0 ? "sine" : "triangle";
+  gain.gain.value = 0.018;
+  oscillator.frequency.value = 220;
+  oscillator.connect(gain).connect(ctx.destination);
+  oscillator.start();
+
+  state.audioOn = true;
+  state.audioNode = {oscillator: oscillator, gain: gain};
+  updateSignalPanels(catalog.signals);
+  updateAudio(signal);
+}
+
+function stopAudio(signalId) {
+  const signal = catalog.signals.find(function(s) { return s.id === signalId; });
+  const state = signalState[signalId];
+  if (!state) return;
+  state.audioOn = false;
+  if (state.audioNode) {
+    try { state.audioNode.gain.gain.setTargetAtTime(0, audioContext.currentTime, .02); } catch (_) {}
+    try { state.audioNode.oscillator.stop(audioContext.currentTime + .08); } catch (_) {}
+    state.audioNode = null;
+  }
+  if (signal) updateSignalPanels(catalog.signals);
+}
+
+function updateAudio(signal) {
+  const state = ensureSignalState(signal);
+  if (!state.audioOn || !state.audioNode || !state.values.length || !audioContext) return;
+  const recent = state.values.slice(-250);
+  let min = Math.min.apply(null, recent);
+  let max = Math.max.apply(null, recent);
+  const current = recent[recent.length - 1];
+  if (max === min) max = min + 1;
+  let normalized = (current - min) / (max - min);
+  normalized = Math.max(0, Math.min(1, normalized));
+
+  const low = signal.id.indexOf("skin") >= 0 ? 150 : 180;
+  const high = signal.id.indexOf("skin") >= 0 ? 720 : 900;
+  const frequency = low * Math.pow(high / low, normalized);
+  state.audioNode.oscillator.frequency.setTargetAtTime(
+    frequency, audioContext.currentTime, .035
+  );
+}
+
+document.getElementById("recordBtn").onclick = function() {
+  post(runtimeStatus.recording ? "record_stop" : "record_start").then(refreshAll);
+};
+document.getElementById("folderBtn").onclick = function() { post("reveal_recordings"); };
+document.getElementById("oscApply").onclick = function() {
+  post("osc", {
+    enabled: document.getElementById("oscEnabled").checked,
+    host: document.getElementById("oscHost").value,
+    port: Number(document.getElementById("oscPort").value)
+  }).then(refreshAll);
+};
 
 function deviceName(d) {
   return d.known || d.product || "Unnamed HID device";
@@ -1190,303 +1555,124 @@ function selectDiagnosticDevice(d, row) {
     deviceName(d) + "  " + d.vendor_hex + ":" + d.product_hex;
 }
 
-function renderDevices(devices) {
+function renderDiagnosticDevices(devices) {
   diagnosticDevices = devices || [];
   const host = document.getElementById("deviceList");
   const showAll = document.getElementById("showAllDevices").checked;
-  const visibleDevices = showAll
+  const visible = showAll
     ? diagnosticDevices
     : diagnosticDevices.filter(function(d) { return !d.obviously_unrelated; });
-  const hiddenCount = diagnosticDevices.length - visibleDevices.length;
+  const hidden = diagnosticDevices.length - visible.length;
 
   if (!diagnosticDevices.length) {
-    host.innerHTML = '<div class="small">No HID devices were found.</div>';
+    host.innerHTML = '<div class="small" style="margin-top:12px">No HID devices found.</div>';
     return;
   }
 
-  if (!visibleDevices.length) {
-    host.innerHTML =
-      '<div class="small">No likely or unclassified devices are visible. ' +
-      hiddenCount + ' obviously unrelated device(s) are hidden. ' +
-      'Turn on “Show obviously unrelated HID devices” to inspect them.</div>';
-    return;
-  }
-
-  let html = '';
-  if (hiddenCount > 0) {
-    html += '<div class="small">' + hiddenCount +
-      ' obviously unrelated HID device(s) hidden.</div>';
-  }
+  let html = hidden
+    ? '<div class="small" style="margin-top:12px">' + hidden + ' obviously unrelated HID device(s) hidden.</div>'
+    : '';
 
   html += '<table class="device-table"><thead><tr>' +
-    '<th>Device</th><th>Manufacturer</th><th>USB ID</th>' +
-    '<th>Usage</th><th></th></tr></thead><tbody>';
+    '<th>Device</th><th>Manufacturer</th><th>USB ID</th><th>Usage</th><th></th>' +
+    '</tr></thead><tbody>';
 
-  visibleDevices.forEach(function(d, index) {
-    const hiddenNote = d.obviously_unrelated && d.hidden_reason
-      ? '<div class="small">Normally hidden: ' + escapeHtml(d.hidden_reason) + '</div>'
-      : '';
+  visible.forEach(function(d, index) {
     html += '<tr data-device-index="' + index + '">' +
       '<td><strong>' + escapeHtml(deviceName(d)) + '</strong>' +
-      (d.known ? '<div class="small">' + escapeHtml(d.product) + '</div>' : '') +
-      hiddenNote +
-      '</td>' +
-      '<td>' + escapeHtml(d.manufacturer || "—") + '</td>' +
-      '<td><code>' + escapeHtml(d.vendor_hex + ":" + d.product_hex) + '</code></td>' +
-      '<td><code>0x' + Number(d.usage_page).toString(16).padStart(4, "0") +
-      ' / ' + escapeHtml(d.usage) + '</code></td>' +
+        (d.known ? '<div class="small">' + escapeHtml(d.product) + '</div>' : '') + '</td>' +
+      '<td>' + escapeHtml(d.manufacturer || "-") + '</td>' +
+      '<td class="mono">' + escapeHtml(d.vendor_hex + ":" + d.product_hex) + '</td>' +
+      '<td class="mono">0x' + Number(d.usage_page).toString(16).padStart(4, "0") +
+        ' / ' + escapeHtml(d.usage) + '</td>' +
       '<td><button class="select-device">Select</button></td>' +
-      '</tr>';
+    '</tr>';
   });
-
   html += '</tbody></table>';
   host.innerHTML = html;
 
   host.querySelectorAll("tr[data-device-index]").forEach(function(row) {
     const index = Number(row.dataset.deviceIndex);
     row.querySelector(".select-device").onclick = function() {
-      selectDiagnosticDevice(visibleDevices[index], row);
+      selectDiagnosticDevice(visible[index], row);
     };
   });
 
-  const emwaveIndex = visibleDevices.findIndex(function(d) {
+  const preferred = visible.findIndex(function(d) {
     return d.vendor_id === 0x0e30 && d.product_id === 0x0002;
   });
-  if (emwaveIndex >= 0) {
-    const row = host.querySelector('tr[data-device-index="' + emwaveIndex + '"]');
-    selectDiagnosticDevice(visibleDevices[emwaveIndex], row);
+  if (preferred >= 0) {
+    const row = host.querySelector('tr[data-device-index="' + preferred + '"]');
+    selectDiagnosticDevice(visible[preferred], row);
   }
 }
 
 function scanDevices() {
   const output = document.getElementById("diagOutput");
-  output.textContent = "Scanning HID devices…";
+  output.textContent = "Scanning HID devices...";
   fetch("/api/devices")
     .then(r => r.json())
     .then(function(data) {
       diagnosticDevices = data.devices || [];
-      renderDevices(diagnosticDevices);
-      const hidden = diagnosticDevices.filter(function(d) {
-        return d.obviously_unrelated;
-      }).length;
+      renderDiagnosticDevices(diagnosticDevices);
+      const hidden = diagnosticDevices.filter(function(d) { return d.obviously_unrelated; }).length;
       output.textContent =
         "Found " + diagnosticDevices.length + " HID device(s)." +
         (hidden ? " " + hidden + " obviously unrelated device(s) hidden by default." : "") +
         " Select one to test or capture.";
     })
-    .catch(function(err) {
-      output.textContent = String(err);
-    });
-}
-
-function refreshStatus() {
-  fetch("/api/status")
-    .then(r => r.json())
-    .then(function(s) {
-      const dot = document.getElementById("dot");
-      const text = document.getElementById("statusText");
-      dot.className = s.connected ? "dot on" : "dot";
-      if (!s.running) text.textContent = "Acquisition stopped";
-      else if (s.connected) text.textContent = "Lightstone connected";
-      else text.textContent = "Waiting for Lightstone";
-
-      document.getElementById("runBtn").textContent = s.running ? "Stop acquisition" : "Start acquisition";
-      document.getElementById("runBtn").className = s.running ? "primary" : "";
-
-      const rb = document.getElementById("recordBtn");
-      rb.textContent = s.recording ? "Stop recording" : "Start recording";
-      rb.className = s.recording ? "recording" : "";
-      document.getElementById("recordValue").textContent = s.recording ? "ON" : "OFF";
-      document.getElementById("oscEnabled").checked = s.osc_enabled;
-      document.getElementById("oscHost").value = s.osc_host;
-      document.getElementById("oscPort").value = s.osc_port;
-      document.getElementById("error").textContent = s.last_error || "";
-
-      const emwaveDot = document.getElementById("emwaveDot");
-      emwaveDot.className = s.emwave_connected ? "dot on" : "dot";
-      const emwaveStatus = document.getElementById("emwaveStatus");
-      if (!s.emwave_running) emwaveStatus.textContent = "emWave stopped";
-      else if (s.emwave_connected) emwaveStatus.textContent = "emWave connected";
-      else emwaveStatus.textContent = "Waiting for emWave";
-
-      const emwaveBtn = document.getElementById("emwaveRunBtn");
-      emwaveBtn.textContent = s.emwave_running ? "Stop emWave" : "Start emWave";
-      emwaveBtn.className = s.emwave_running ? "primary" : "";
-      document.getElementById("emwaveSampleValue").textContent = s.emwave_sample_count || 0;
-      document.getElementById("emwaveGapValue").textContent = s.emwave_gap_count || 0;
-      if (s.emwave_latest) {
-        document.getElementById("emwaveValue").textContent = s.emwave_latest.pulse;
-      }
-    })
-    .catch(function(err) {
-      document.getElementById("error").textContent = String(err);
-    });
-}
-
-function pollSamples() {
-  fetch("/api/samples?after=" + lastSeq)
-    .then(r => r.json())
-    .then(function(data) {
-      data.samples.forEach(function(s) {
-        lastSeq = Math.max(lastSeq, s.seq);
-        totalSamples++;
-        skin.push(s.skin);
-        pulse.push(s.pulse);
-      });
-      trim(skin);
-      trim(pulse);
-
-      if (data.samples.length) {
-        const latest = data.samples[data.samples.length - 1];
-        document.getElementById("skinValue").textContent = latest.skin;
-        document.getElementById("pulseValue").textContent = latest.pulse;
-        document.getElementById("sampleValue").textContent = totalSamples;
-      }
-
-      draw(document.getElementById("skinChart"), skin, "#7dd3fc", document.getElementById("skinRange"));
-      draw(document.getElementById("pulseChart"), pulse, "#f9a8d4", document.getElementById("pulseRange"));
-    })
-    .catch(function(err) {
-      document.getElementById("error").textContent = String(err);
-    });
-}
-
-
-
-function pollEmWaveSamples() {
-  fetch("/api/emwave_samples?after=" + emwaveLastSeq)
-    .then(r => r.json())
-    .then(function(data) {
-      data.samples.forEach(function(s) {
-        emwaveLastSeq = Math.max(emwaveLastSeq, s.seq);
-        emwavePulse.push(s.pulse);
-      });
-      if (emwavePulse.length > emwaveMaxPoints) {
-        emwavePulse.splice(0, emwavePulse.length - emwaveMaxPoints);
-      }
-      if (data.samples.length) {
-        const latest = data.samples[data.samples.length - 1];
-        document.getElementById("emwaveValue").textContent = latest.pulse;
-      }
-      draw(
-        document.getElementById("emwaveChart"),
-        emwavePulse,
-        "#c4b5fd",
-        { textContent: "" }
-      );
-    })
-    .catch(function(err) {
-      document.getElementById("error").textContent = String(err);
-    });
+    .catch(function(err) { output.textContent = String(err); });
 }
 
 document.getElementById("scanBtn").onclick = scanDevices;
 document.getElementById("showAllDevices").onchange = function() {
-  renderDevices(diagnosticDevices);
+  renderDiagnosticDevices(diagnosticDevices);
 };
-
 document.getElementById("testDeviceBtn").onclick = function() {
   const output = document.getElementById("diagOutput");
-  if (!diagnosticDevice) {
-    output.textContent = "Select a device first.";
-    return;
-  }
-
-  output.textContent = "Testing access to " + deviceName(diagnosticDevice) + "…";
+  if (!diagnosticDevice) { output.textContent = "Select a device first."; return; }
+  output.textContent = "Testing access to " + deviceName(diagnosticDevice) + "...";
   post("diag_test", {path: diagnosticDevice.path_token}).then(function(result) {
     if (!result.ok) throw new Error(result.error || "Device test failed.");
     diagnosticText =
-      "Opened successfully.\n" +
-      deviceName(diagnosticDevice) + "\n" +
+      "Opened successfully.\n" + deviceName(diagnosticDevice) + "\n" +
       diagnosticDevice.vendor_hex + ":" + diagnosticDevice.product_hex;
     output.textContent = diagnosticText;
-  }).catch(function(err) {
-    output.textContent = String(err);
-  });
+  }).catch(function(err) { output.textContent = String(err); });
 };
-
 document.getElementById("captureDeviceBtn").onclick = function() {
   const output = document.getElementById("diagOutput");
-  if (!diagnosticDevice) {
-    output.textContent = "Select a device first.";
-    return;
-  }
-
+  if (!diagnosticDevice) { output.textContent = "Select a device first."; return; }
   const seconds = Number(document.getElementById("captureSeconds").value || 5);
-  output.textContent =
-    "Capturing " + seconds + " seconds from " + deviceName(diagnosticDevice) + "…";
-
-  post("diag_capture", {
-    path: diagnosticDevice.path_token,
-    seconds: seconds
-  }).then(function(result) {
-    if (!result.ok) throw new Error(result.error || "Capture failed.");
-    diagnosticText = result.result.summary || "";
-    output.textContent = diagnosticText +
-      "\n\nSaved locally: " + result.result.saved_path;
-  }).catch(function(err) {
-    output.textContent = String(err);
-  });
+  output.textContent = "Capturing " + seconds + " seconds from " + deviceName(diagnosticDevice) + "...";
+  post("diag_capture", {path: diagnosticDevice.path_token, seconds: seconds})
+    .then(function(result) {
+      if (!result.ok) throw new Error(result.error || "Capture failed.");
+      diagnosticText = result.result.summary || "";
+      output.textContent = diagnosticText + "\n\nSaved locally: " + result.result.saved_path;
+    })
+    .catch(function(err) { output.textContent = String(err); });
 };
-
 document.getElementById("copyDiagBtn").onclick = function() {
   const output = document.getElementById("diagOutput");
   const text = diagnosticText || output.textContent;
   if (!text) return;
-
   navigator.clipboard.writeText(text).then(function() {
-    const old = output.textContent;
-    output.textContent = old + "\n\n[Copied to clipboard]";
+    output.textContent += "\n\n[Copied to clipboard]";
   }).catch(function() {
-    output.textContent += "\n\nClipboard access failed. Select the text above and copy it manually.";
+    output.textContent += "\n\nClipboard access failed. Select the report and copy it manually.";
   });
 };
-
-document.getElementById("captureFolderBtn").onclick = function() {
-  post("reveal_captures");
-};
-
-document.getElementById("emwaveRunBtn").onclick = function() {
-  fetch("/api/status").then(r => r.json()).then(function(s) {
-    return post(s.emwave_running ? "emwave_stop" : "emwave_start");
-  }).then(refreshStatus);
-};
-
-document.getElementById("runBtn").onclick = function() {
-  fetch("/api/status").then(r => r.json()).then(function(s) {
-    return post(s.running ? "stop" : "start");
-  }).then(refreshStatus);
-};
-
-document.getElementById("recordBtn").onclick = function() {
-  fetch("/api/status").then(r => r.json()).then(function(s) {
-    return post(s.recording ? "record_stop" : "record_start");
-  }).then(refreshStatus);
-};
-
-document.getElementById("folderBtn").onclick = function() {
-  post("reveal_recordings");
-};
-
-document.getElementById("oscApply").onclick = function() {
-  post("osc", {
-    enabled: document.getElementById("oscEnabled").checked,
-    host: document.getElementById("oscHost").value,
-    port: Number(document.getElementById("oscPort").value)
-  }).then(refreshStatus);
-};
+document.getElementById("captureFolderBtn").onclick = function() { post("reveal_captures"); };
 
 window.addEventListener("resize", function() {
-  draw(document.getElementById("skinChart"), skin, "#7dd3fc", document.getElementById("skinRange"));
-  draw(document.getElementById("pulseChart"), pulse, "#f9a8d4", document.getElementById("pulseRange"));
-  draw(document.getElementById("emwaveChart"), emwavePulse, "#c4b5fd", { textContent: "" });
+  if (document.getElementById("tab-use").classList.contains("active")) drawAllSignals();
 });
 
-refreshStatus();
+refreshAll();
 scanDevices();
-setInterval(refreshStatus, 1000);
-setInterval(pollSamples, 100);
-setInterval(pollEmWaveSamples, 100);
+setInterval(refreshAll, 1000);
+setInterval(pollSignals, 100);
 </script>
 </body>
 </html>
