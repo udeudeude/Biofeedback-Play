@@ -31,11 +31,7 @@ From the repository:
 
 The app opens http://127.0.0.1:8765 automatically.
 
-A macOS launcher is also included as Biofeedback Play.command. After pulling it for the first time, make it double-clickable once:
-
-    chmod +x "Biofeedback Play.command"
-
-After that, normal use should not require typing Terminal commands.
+A macOS launcher is also included as Biofeedback Play.command and is committed as an executable file. After the repository is pulled, normal use should be as simple as double-clicking that launcher in Finder. It starts the local service and opens the browser interface.
 
 ## OSC
 
