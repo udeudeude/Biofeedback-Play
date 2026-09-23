@@ -1461,6 +1461,7 @@ const signalState = {};
 let diagnosticDevice = null;
 let diagnosticText = "";
 let diagnosticDevices = [];
+let musePorts = [];
 let audioContext = null;
 
 function post(action, extra) {
@@ -1612,6 +1613,47 @@ function renderDeviceSetup(devices) {
       return '<span class="badge">' + escapeHtml(signal ? signal.name : signalId) + '</span>';
     }).join("");
 
+    let deviceSpecific = "";
+    if (device.id === "muse") {
+      const currentPort = device.port || "";
+      let options = '<option value="">Select Muse serial port</option>';
+      musePorts.forEach(function(port) {
+        const selected = port.device === currentPort ? " selected" : "";
+        const label = port.device + (port.description ? " · " + port.description : "") +
+          (port.likely_muse ? " · likely Muse" : "");
+        options += '<option value="' + escapeHtml(port.device) + '"' + selected + '>' +
+          escapeHtml(label) + '</option>';
+      });
+
+      const battery = device.battery && device.battery.percentage != null
+        ? Number(device.battery.percentage).toFixed(1) + "%"
+        : "—";
+      const afe = device.afe_gain != null ? String(device.afe_gain) : "—";
+      const version = device.version ? escapeHtml(device.version) : "—";
+
+      deviceSpecific =
+        '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">' +
+          '<div class="label">Muse Bluetooth setup</div>' +
+          '<div class="small" style="margin-top:6px">' +
+            'MU-01 uses classic Bluetooth serial. Pair a device named Muse-… in macOS Bluetooth settings, then scan for its serial port.' +
+          '</div>' +
+          '<div class="row" style="margin-top:10px">' +
+            '<select id="musePortSelect">' + options + '</select>' +
+            '<button id="museSavePort">Use selected port</button>' +
+            '<button id="museScanPorts">Scan serial ports</button>' +
+            '<button id="museBluetoothSettings">Open Bluetooth settings</button>' +
+          '</div>' +
+          '<div class="device-meta small">' +
+            '<div><strong>Selected port:</strong> <span class="mono">' + escapeHtml(currentPort || "none") + '</span></div>' +
+            '<div><strong>Battery:</strong> ' + battery + '</div>' +
+            '<div><strong>AFE gain:</strong> ' + afe + '</div>' +
+            '<div><strong>Version/status:</strong> <span class="mono">' + version + '</span></div>' +
+            '<div><strong>EEG samples:</strong> ' + Number(device.eeg_sample_count || 0).toLocaleString() +
+              ' · <strong>Accelerometer samples:</strong> ' + Number(device.accel_sample_count || 0).toLocaleString() + '</div>' +
+          '</div>' +
+        '</div>';
+    }
+
     return (
       '<div class="device-card">' +
         '<div class="row between">' +
@@ -1630,6 +1672,7 @@ function renderDeviceSetup(devices) {
           (device.error ? '<div style="color:#ff9b9b"><strong>Error:</strong> ' + escapeHtml(device.error) + '</div>' : '') +
         '</div>' +
         '<div class="device-signals">' + signals + '</div>' +
+        deviceSpecific +
         '<div style="margin-top:12px">' +
           '<button data-device-toggle="' + escapeHtml(device.id) + '">' +
             (device.running ? "Stop acquisition" : "Start acquisition") +
@@ -1649,6 +1692,42 @@ function renderDeviceSetup(devices) {
         .then(refreshAll);
     };
   });
+
+  const museScan = document.getElementById("museScanPorts");
+  if (museScan) museScan.onclick = refreshMusePorts;
+
+  const museSettings = document.getElementById("museBluetoothSettings");
+  if (museSettings) museSettings.onclick = function() {
+    post("open_bluetooth_settings");
+  };
+
+  const museSave = document.getElementById("museSavePort");
+  if (museSave) museSave.onclick = function() {
+    const select = document.getElementById("musePortSelect");
+    post("muse_set_port", {port: select ? select.value : ""}).then(refreshAll);
+  };
+}
+
+
+function refreshMusePorts() {
+  return fetch("/api/muse_ports")
+    .then(r => r.json())
+    .then(function(data) {
+      musePorts = data.ports || [];
+
+      if (!data.current) {
+        const likely = musePorts.filter(function(port) { return port.likely_muse; });
+        if (likely.length === 1) {
+          return post("muse_set_port", {port: likely[0].device})
+            .then(refreshAll);
+        }
+      }
+
+      renderDeviceSetup(catalog.devices);
+    })
+    .catch(function(err) {
+      document.getElementById("error").textContent = String(err);
+    });
 }
 
 function updateGlobalStatus() {
@@ -1998,6 +2077,7 @@ window.addEventListener("resize", function() {
 });
 
 refreshAll();
+refreshMusePorts();
 scanDevices();
 setInterval(refreshAll, 1000);
 setInterval(pollSignals, 100);
