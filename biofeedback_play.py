@@ -34,6 +34,71 @@ RECORDINGS.mkdir(exist_ok=True)
 CAPTURES = ROOT / "captures"
 CAPTURES.mkdir(exist_ok=True)
 
+DEVICE_DEFINITIONS = {
+    "lightstone": {
+        "name": "Wild Divine Lightstone",
+        "manufacturer": "Wild Divine",
+        "transport": "USB HID",
+        "usb_id": "14fa:0001",
+        "summary": "Finger-sensor interface providing skin-conductance and pulse-waveform channels.",
+    },
+    "emwave": {
+        "name": "HeartMath emWave Pulse Sensor",
+        "manufacturer": "HeartMath / Quantum Intech",
+        "transport": "USB HID",
+        "usb_id": "0e30:0002",
+        "summary": "Ear-clip optical pulse sensor with a directly readable raw waveform.",
+    },
+}
+
+SIGNAL_DEFINITIONS = {
+    "lightstone.skin_raw": {
+        "device_id": "lightstone",
+        "name": "Skin conductance",
+        "short_name": "Skin",
+        "data_label": "Raw skin-conductance channel",
+        "unit": "raw device units",
+        "description": (
+            "Electrical skin-conductance signal from the two plain finger electrodes. "
+            "Useful for slow changes in arousal; values are not calibrated to microsiemens."
+        ),
+        "audio": "Pitch follows the recent signal level. Higher recent values produce a higher tone.",
+        "osc": "/biofeedback/lightstone/skin_raw",
+        "nominal_rate": None,
+        "value_key": "skin",
+    },
+    "lightstone.pulse_raw": {
+        "device_id": "lightstone",
+        "name": "Pulse waveform",
+        "short_name": "Pulse",
+        "data_label": "Raw blood-volume pulse waveform",
+        "unit": "raw device units",
+        "description": (
+            "Optical pulse waveform from the gold-dot finger sensor. This is the waveform itself, "
+            "not heart rate or beats per minute."
+        ),
+        "audio": "Pitch follows the recent pulse-wave shape, making each beat audible as a contour.",
+        "osc": "/biofeedback/lightstone/pulse_raw",
+        "nominal_rate": None,
+        "value_key": "pulse",
+    },
+    "emwave.pulse_raw": {
+        "device_id": "emwave",
+        "name": "Pulse waveform",
+        "short_name": "Pulse",
+        "data_label": "Raw 8-bit optical pulse waveform",
+        "unit": "0–255 raw units",
+        "description": (
+            "Direct USB waveform from the emWave ear clip. The current packet interpretation is "
+            "capture-derived and experimental; it is not a heart-rate value."
+        ),
+        "audio": "Pitch follows the recent pulse-wave shape. Packet gaps are tracked separately.",
+        "osc": "/biofeedback/emwave/pulse_raw",
+        "nominal_rate": EMWAVE_NOMINAL_SAMPLE_RATE,
+        "value_key": "pulse",
+    },
+}
+
 
 class EmWaveParser:
     """Experimental parser based on captures from emWave USB 0x0E30:0x0002.
@@ -396,6 +461,14 @@ class BiofeedbackState:
             if not self.emwave_running:
                 self.emwave_connected = False
 
+    def set_device_running(self, device_id: str, value: bool) -> None:
+        if device_id == "lightstone":
+            self.set_running(value)
+        elif device_id == "emwave":
+            self.set_emwave_running(value)
+        else:
+            raise ValueError(f"Unknown device: {device_id}")
+
     def set_osc(self, enabled: bool, host: str | None = None, port: int | None = None) -> None:
         with self.lock:
             if host:
@@ -410,10 +483,12 @@ class BiofeedbackState:
                 return self.recording_path
 
             stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
-            path = RECORDINGS / ("lightstone_" + stamp + ".csv")
+            path = RECORDINGS / ("biofeedback_" + stamp + ".csv")
             fp = path.open("w", newline="", encoding="utf-8")
             writer = csv.writer(fp)
-            writer.writerow(["unix_time", "elapsed_s", "skin_raw", "pulse_raw"])
+            writer.writerow(
+                ["unix_time", "elapsed_s", "device_id", "signal_id", "value"]
+            )
             fp.flush()
 
             self.recording_file = fp
@@ -465,6 +540,79 @@ class BiofeedbackState:
                 "emwave_gap_count": self.emwave_gap_count,
             }
 
+    def device_catalog(self) -> list[dict]:
+        with self.lock:
+            status_by_device = {
+                "lightstone": {
+                    "connected": self.connected,
+                    "running": self.running,
+                    "error": self.last_error,
+                    "sample_count": self.seq,
+                },
+                "emwave": {
+                    "connected": self.emwave_connected,
+                    "running": self.emwave_running,
+                    "error": self.emwave_last_error,
+                    "sample_count": self.emwave_seq,
+                    "packet_count": self.emwave_packet_count,
+                    "packet_gaps": self.emwave_gap_count,
+                },
+            }
+            out = []
+            for device_id, definition in DEVICE_DEFINITIONS.items():
+                item = {"id": device_id, **definition, **status_by_device[device_id]}
+                item["signals"] = [
+                    signal_id
+                    for signal_id, signal in SIGNAL_DEFINITIONS.items()
+                    if signal["device_id"] == device_id
+                ]
+                out.append(item)
+            return out
+
+    def signal_catalog(self) -> list[dict]:
+        devices = {item["id"]: item for item in self.device_catalog()}
+        signals = []
+        for signal_id, definition in SIGNAL_DEFINITIONS.items():
+            device = devices[definition["device_id"]]
+            signals.append(
+                {
+                    "id": signal_id,
+                    **definition,
+                    "device_name": device["name"],
+                    "connected": device["connected"],
+                    "running": device["running"],
+                    "device_error": device["error"],
+                    "sample_count": device["sample_count"],
+                    "packet_gaps": device.get("packet_gaps"),
+                }
+            )
+        return signals
+
+    def signal_samples_after(self, signal_id: str, seq: int) -> list[dict]:
+        definition = SIGNAL_DEFINITIONS.get(signal_id)
+        if definition is None:
+            raise ValueError(f"Unknown signal: {signal_id}")
+
+        key = definition["value_key"]
+        with self.lock:
+            if definition["device_id"] == "lightstone":
+                source = [sample for sample in self.samples if sample["seq"] > seq][-600:]
+            elif definition["device_id"] == "emwave":
+                source = [
+                    sample for sample in self.emwave_samples if sample["seq"] > seq
+                ][-1500:]
+            else:
+                source = []
+
+            return [
+                {
+                    "seq": sample["seq"],
+                    "t": sample["t"],
+                    "value": sample[key],
+                }
+                for sample in source
+            ]
+
     def samples_after(self, seq: int) -> list[dict]:
         with self.lock:
             return [sample for sample in self.samples if sample["seq"] > seq][-300:]
@@ -494,6 +642,17 @@ class BiofeedbackState:
                 }
                 self.emwave_samples.append(sample)
 
+                if self.recording and self.recording_writer:
+                    self.recording_writer.writerow(
+                        [
+                            f"{time.time():.6f}",
+                            f"{sample['t']:.6f}",
+                            "emwave",
+                            "emwave.pulse_raw",
+                            int(value),
+                        ]
+                    )
+
                 if self.osc_enabled:
                     target = (self.osc_host, self.osc_port)
                     try:
@@ -503,6 +662,9 @@ class BiofeedbackState:
                         )
                     except OSError as exc:
                         self.emwave_last_error = "OSC: " + str(exc)
+
+            if self.recording and self.recording_file and self.emwave_packet_count % 10 == 0:
+                self.recording_file.flush()
 
     def _store_sample(self, skin: int, pulse: int) -> None:
         now_unix = time.time()
@@ -521,7 +683,22 @@ class BiofeedbackState:
 
             if self.recording and self.recording_writer:
                 self.recording_writer.writerow(
-                    [f"{now_unix:.6f}", f"{elapsed:.6f}", skin, pulse]
+                    [
+                        f"{now_unix:.6f}",
+                        f"{elapsed:.6f}",
+                        "lightstone",
+                        "lightstone.skin_raw",
+                        skin,
+                    ]
+                )
+                self.recording_writer.writerow(
+                    [
+                        f"{now_unix:.6f}",
+                        f"{elapsed:.6f}",
+                        "lightstone",
+                        "lightstone.pulse_raw",
+                        pulse,
+                    ]
                 )
                 if self.seq % 30 == 0 and self.recording_file:
                     self.recording_file.flush()
