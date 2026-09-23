@@ -98,11 +98,13 @@ def hid_is_obviously_unrelated(
         return False, ""
 
     text = f"{manufacturer} {product_name}".strip().lower()
+    compact_text = re.sub(r"[^a-z0-9]+", "", text)
     obvious_terms = {
         "keyboard": "keyboard",
         "trackpad": "trackpad",
         "mouse": "mouse",
         "touch bar": "Touch Bar",
+        "touchbar": "Touch Bar",
         "facetime": "camera",
         "camera": "camera",
         "headset": "headset controls",
@@ -114,7 +116,7 @@ def hid_is_obviously_unrelated(
         "apple t2 controller": "computer controller",
     }
     for term, reason in obvious_terms.items():
-        if term in text:
+        if term in text or re.sub(r"[^a-z0-9]+", "", term) in compact_text:
             return True, reason
 
     return False, ""
@@ -451,6 +453,13 @@ class BiofeedbackState:
 
             try:
                 if device is None:
+                    if not hid.enumerate(VENDOR_ID, PRODUCT_ID):
+                        with self.lock:
+                            self.connected = False
+                            self.last_error = ""
+                        time.sleep(1.0)
+                        continue
+
                     device = hid.device()
                     device.open(VENDOR_ID, PRODUCT_ID)
                     with self.lock:
