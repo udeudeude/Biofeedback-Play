@@ -1666,7 +1666,7 @@ function renderDeviceSetup(devices) {
         '<div class="device-meta small">' +
           '<div><strong>Manufacturer:</strong> ' + escapeHtml(device.manufacturer) + '</div>' +
           '<div><strong>Transport:</strong> ' + escapeHtml(device.transport) + '</div>' +
-          '<div><strong>USB:</strong> <span class="mono">' + escapeHtml(device.usb_id) + '</span></div>' +
+          '<div><strong>Hardware ID:</strong> <span class="mono">' + escapeHtml(device.usb_id) + '</span></div>' +
           '<div><strong>Samples received:</strong> ' + Number(device.sample_count || 0).toLocaleString() + '</div>' +
           (device.packet_gaps != null ? '<div><strong>Packet gaps:</strong> ' + escapeHtml(device.packet_gaps) + '</div>' : '') +
           (device.error ? '<div style="color:#ff9b9b"><strong>Error:</strong> ' + escapeHtml(device.error) + '</div>' : '') +
@@ -1752,7 +1752,9 @@ function applyCatalog(data) {
     renderSignalPanels(catalog.signals);
   }
   updateSignalPanels(catalog.signals);
-  renderDeviceSetup(catalog.devices);
+  if (!document.activeElement || document.activeElement.id !== "musePortSelect") {
+    renderDeviceSetup(catalog.devices);
+  }
   updateGlobalStatus();
 }
 
