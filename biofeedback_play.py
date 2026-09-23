@@ -662,6 +662,19 @@ class BiofeedbackState:
         except Exception:
             pass
 
+    def open_bluetooth_settings(self) -> None:
+        try:
+            subprocess.Popen(
+                ["open", "x-apple.systempreferences:com.apple.BluetoothSettings"]
+            )
+        except Exception:
+            try:
+                subprocess.Popen(
+                    ["open", "/System/Library/PreferencePanes/Bluetooth.prefPane"]
+                )
+            except Exception:
+                pass
+
     def status(self) -> dict:
         with self.lock:
             latest = self.samples[-1] if self.samples else None
@@ -739,6 +752,12 @@ class BiofeedbackState:
         signals = []
         for signal_id, definition in SIGNAL_DEFINITIONS.items():
             device = devices[definition["device_id"]]
+            sample_count = device["sample_count"]
+            if signal_id.startswith("muse.accel."):
+                sample_count = device.get("accel_sample_count", 0)
+            elif signal_id.startswith("muse.eeg."):
+                sample_count = device.get("eeg_sample_count", 0)
+
             signals.append(
                 {
                     "id": signal_id,
@@ -747,8 +766,10 @@ class BiofeedbackState:
                     "connected": device["connected"],
                     "running": device["running"],
                     "device_error": device["error"],
-                    "sample_count": device["sample_count"],
+                    "sample_count": sample_count,
                     "packet_gaps": device.get("packet_gaps"),
+                    "battery": device.get("battery"),
+                    "afe_gain": device.get("afe_gain"),
                 }
             )
         return signals
