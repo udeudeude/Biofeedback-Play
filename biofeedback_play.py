@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import base64
 import csv
 import json
 import os
@@ -27,6 +28,8 @@ PORT = 8765
 ROOT = Path(__file__).resolve().parent
 RECORDINGS = ROOT / "recordings"
 RECORDINGS.mkdir(exist_ok=True)
+CAPTURES = ROOT / "captures"
+CAPTURES.mkdir(exist_ok=True)
 
 
 class LightstoneParser:
@@ -76,6 +79,191 @@ def osc_message(address: str, value: int | float) -> bytes:
         tags = ",f"
         payload = struct.pack(">f", float(value))
     return osc_pad(address.encode("utf-8")) + osc_pad(tags.encode("ascii")) + payload
+
+
+def encode_hid_path(path) -> str:
+    if isinstance(path, str):
+        path = path.encode("utf-8")
+    return base64.urlsafe_b64encode(bytes(path)).decode("ascii")
+
+
+def decode_hid_path(token: str) -> bytes:
+    return base64.urlsafe_b64decode(token.encode("ascii"))
+
+
+def hid_device_list() -> list[dict]:
+    devices: list[dict] = []
+    for item in hid.enumerate():
+        path = item.get("path")
+        if path is None:
+            continue
+
+        vendor = int(item.get("vendor_id") or 0)
+        product = int(item.get("product_id") or 0)
+        manufacturer = str(item.get("manufacturer_string") or "").strip()
+        product_name = str(item.get("product_string") or "").strip()
+
+        known = ""
+        if vendor == VENDOR_ID and product == PRODUCT_ID:
+            known = "Wild Divine Lightstone"
+        elif vendor == 0x0E30 and product == 0x0002:
+            known = "HeartMath emWave Pulse Sensor"
+
+        if isinstance(path, str):
+            path_bytes = path.encode("utf-8")
+            path_display = path
+        else:
+            path_bytes = bytes(path)
+            path_display = path_bytes.decode("utf-8", errors="replace")
+
+        devices.append(
+            {
+                "path_token": encode_hid_path(path_bytes),
+                "path": path_display,
+                "vendor_id": vendor,
+                "product_id": product,
+                "vendor_hex": f"0x{vendor:04x}",
+                "product_hex": f"0x{product:04x}",
+                "manufacturer": manufacturer,
+                "product": product_name,
+                "serial_number": str(item.get("serial_number") or "").strip(),
+                "release_number": int(item.get("release_number") or 0),
+                "usage_page": int(item.get("usage_page") or 0),
+                "usage": int(item.get("usage") or 0),
+                "interface_number": int(item.get("interface_number") or 0),
+                "bus_type": int(item.get("bus_type") or 0),
+                "known": known,
+            }
+        )
+
+    devices.sort(
+        key=lambda d: (
+            0 if d["known"] else 1,
+            (d["manufacturer"] or "").lower(),
+            (d["product"] or "").lower(),
+            d["vendor_id"],
+            d["product_id"],
+        )
+    )
+    return devices
+
+
+def hid_device_for_token(token: str) -> dict:
+    for device in hid_device_list():
+        if device["path_token"] == token:
+            return device
+    raise RuntimeError("That HID device is no longer connected. Scan again.")
+
+
+def test_hid_device(token: str) -> dict:
+    meta = hid_device_for_token(token)
+    device = hid.device()
+    try:
+        device.open_path(decode_hid_path(token))
+    finally:
+        try:
+            device.close()
+        except Exception:
+            pass
+    return {"opened": True, "device": meta}
+
+
+def capture_summary(capture: dict, max_lines: int = 250) -> str:
+    device = capture["device"]
+    lines = [
+        "Biofeedback Play HID capture",
+        f"Device: {device.get('known') or device.get('product') or 'Unknown HID device'}",
+        f"Manufacturer: {device.get('manufacturer') or 'Unknown'}",
+        f"Vendor/Product: {device['vendor_hex']} / {device['product_hex']}",
+        f"Usage page / usage: 0x{device['usage_page']:04x} / {device['usage']}",
+        f"Duration: {capture['duration_s']:.3f} s",
+        f"Reports received: {len(capture['reports'])}",
+        "",
+        "time_s    hex bytes                                              ASCII",
+    ]
+
+    for report in capture["reports"][:max_lines]:
+        lines.append(
+            f"{report['t']:8.4f}  {report['hex']:<54}  {report['ascii']}"
+        )
+
+    hidden = len(capture["reports"]) - max_lines
+    if hidden > 0:
+        lines.extend(["", f"... {hidden} additional reports are in the saved JSON capture."])
+
+    return "\n".join(lines)
+
+
+def capture_hid_device(token: str, seconds: float = 5.0) -> dict:
+    seconds = max(1.0, min(float(seconds), 10.0))
+    meta = hid_device_for_token(token)
+
+    if (
+        meta["vendor_id"] == VENDOR_ID
+        and meta["product_id"] == PRODUCT_ID
+        and STATE is not None
+    ):
+        lightstone = STATE.status()
+        if lightstone["running"] and lightstone["connected"]:
+            raise RuntimeError(
+                "The Lightstone is already open for live acquisition. "
+                "Stop acquisition before making a raw diagnostic capture of it."
+            )
+
+    device = hid.device()
+    reports: list[dict] = []
+    started_wall = time.time()
+    started_mono = time.monotonic()
+
+    try:
+        device.open_path(decode_hid_path(token))
+
+        while time.monotonic() - started_mono < seconds and len(reports) < 5000:
+            data = device.read(64, 100)
+            if not data:
+                continue
+
+            values = [int(value) for value in data]
+            reports.append(
+                {
+                    "t": round(time.monotonic() - started_mono, 6),
+                    "bytes": values,
+                    "hex": " ".join(f"{value:02X}" for value in values),
+                    "ascii": "".join(
+                        chr(value) if 32 <= value <= 126 else "."
+                        for value in values
+                    ),
+                }
+            )
+    finally:
+        try:
+            device.close()
+        except Exception:
+            pass
+
+    finished = time.monotonic()
+    capture = {
+        "format": "biofeedback-play-hid-capture-v1",
+        "created_unix": started_wall,
+        "created_local": time.strftime("%Y-%m-%d %H:%M:%S %z"),
+        "duration_s": round(finished - started_mono, 6),
+        "device": meta,
+        "reports": reports,
+    }
+
+    label = meta.get("known") or meta.get("product") or "hid-device"
+    safe_label = re.sub(r"[^A-Za-z0-9._-]+", "_", label).strip("_")[:64] or "hid-device"
+    stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+    path = CAPTURES / f"{stamp}_{safe_label}.json"
+    path.write_text(json.dumps(capture, indent=2), encoding="utf-8")
+
+    return {
+        "device": meta,
+        "duration_s": capture["duration_s"],
+        "report_count": len(reports),
+        "saved_path": str(path),
+        "summary": capture_summary(capture),
+    }
 
 
 class BiofeedbackState:
@@ -147,6 +335,12 @@ class BiofeedbackState:
     def reveal_recordings(self) -> None:
         try:
             subprocess.Popen(["open", str(RECORDINGS)])
+        except Exception:
+            pass
+
+    def reveal_captures(self) -> None:
+        try:
+            subprocess.Popen(["open", str(CAPTURES)])
         except Exception:
             pass
 
@@ -312,6 +506,22 @@ h1 { margin: 0; font-size: 30px; font-weight: 700; letter-spacing: -0.03em; }
 .controls { grid-column: span 6; }
 .osc { grid-column: span 6; }
 .chart { grid-column: span 12; }
+.diagnostics { grid-column: span 12; }
+.device-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+.device-table th { color: var(--muted); font-weight: 600; text-align: left; border-bottom: 1px solid var(--line); padding: 8px 7px; }
+.device-table td { border-bottom: 1px solid rgba(52,59,78,.6); padding: 8px 7px; vertical-align: top; }
+.device-table tr.selected { background: rgba(196,181,253,.09); }
+.device-table code { color: #d8dce7; }
+.diag-output {
+  white-space: pre-wrap; word-break: break-word; margin: 12px 0 0;
+  max-height: 330px; overflow: auto; padding: 12px;
+  background: #090c12; border: 1px solid var(--line); border-radius: 10px;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+select {
+  font: inherit; color: var(--text); background: #0d1017;
+  border: 1px solid var(--line); border-radius: 9px; padding: 8px 9px;
+}
 .label { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .08em; }
 .value { font-size: 36px; font-variant-numeric: tabular-nums; margin-top: 7px; }
 .unit { color: var(--muted); font-size: 13px; margin-top: 4px; }
@@ -413,6 +623,34 @@ canvas {
       </div>
     </section>
 
+
+    <section class="card diagnostics">
+      <div class="charthead">
+        <div>
+          <div class="label">Devices & diagnostics</div>
+          <div class="small">Scan USB HID hardware, test access, and make short raw captures without Terminal.</div>
+        </div>
+        <button id="scanBtn">Scan devices</button>
+      </div>
+
+      <div id="deviceList"></div>
+
+      <div class="row" style="margin-top:12px">
+        <strong id="selectedDevice">No device selected</strong>
+        <select id="captureSeconds" aria-label="Capture duration">
+          <option value="2">2 second capture</option>
+          <option value="5" selected>5 second capture</option>
+          <option value="10">10 second capture</option>
+        </select>
+        <button id="testDeviceBtn">Test open</button>
+        <button id="captureDeviceBtn" class="primary">Capture raw reports</button>
+        <button id="copyDiagBtn">Copy report</button>
+        <button id="captureFolderBtn">Show captures</button>
+      </div>
+
+      <pre id="diagOutput" class="diag-output">Scan, select a device, then test or capture it.</pre>
+    </section>
+
     <section class="card chart">
       <div class="charthead">
         <div>
@@ -512,6 +750,91 @@ function draw(canvas, values, stroke, rangeEl) {
   ctx.stroke();
 }
 
+
+let diagnosticDevice = null;
+let diagnosticText = "";
+
+function escapeHtml(value) {
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function deviceName(d) {
+  return d.known || d.product || "Unnamed HID device";
+}
+
+function selectDiagnosticDevice(d, row) {
+  diagnosticDevice = d;
+  document.querySelectorAll(".device-table tr").forEach(function(r) {
+    r.classList.remove("selected");
+  });
+  if (row) row.classList.add("selected");
+  document.getElementById("selectedDevice").textContent =
+    deviceName(d) + "  " + d.vendor_hex + ":" + d.product_hex;
+}
+
+function renderDevices(devices) {
+  const host = document.getElementById("deviceList");
+  if (!devices.length) {
+    host.innerHTML = '<div class="small">No HID devices were found.</div>';
+    return;
+  }
+
+  let html = '<table class="device-table"><thead><tr>' +
+    '<th>Device</th><th>Manufacturer</th><th>USB ID</th>' +
+    '<th>Usage</th><th></th></tr></thead><tbody>';
+
+  devices.forEach(function(d, index) {
+    html += '<tr data-device-index="' + index + '">' +
+      '<td><strong>' + escapeHtml(deviceName(d)) + '</strong>' +
+      (d.known ? '<div class="small">' + escapeHtml(d.product) + '</div>' : '') +
+      '</td>' +
+      '<td>' + escapeHtml(d.manufacturer || "—") + '</td>' +
+      '<td><code>' + escapeHtml(d.vendor_hex + ":" + d.product_hex) + '</code></td>' +
+      '<td><code>0x' + Number(d.usage_page).toString(16).padStart(4, "0") +
+      ' / ' + escapeHtml(d.usage) + '</code></td>' +
+      '<td><button class="select-device">Select</button></td>' +
+      '</tr>';
+  });
+
+  html += '</tbody></table>';
+  host.innerHTML = html;
+
+  host.querySelectorAll("tr[data-device-index]").forEach(function(row) {
+    const index = Number(row.dataset.deviceIndex);
+    row.querySelector(".select-device").onclick = function() {
+      selectDiagnosticDevice(devices[index], row);
+    };
+  });
+
+  const emwaveIndex = devices.findIndex(function(d) {
+    return d.vendor_id === 0x0e30 && d.product_id === 0x0002;
+  });
+  if (emwaveIndex >= 0) {
+    const row = host.querySelector('tr[data-device-index="' + emwaveIndex + '"]');
+    selectDiagnosticDevice(devices[emwaveIndex], row);
+  }
+}
+
+function scanDevices() {
+  const output = document.getElementById("diagOutput");
+  output.textContent = "Scanning HID devices…";
+  fetch("/api/devices")
+    .then(r => r.json())
+    .then(function(data) {
+      renderDevices(data.devices || []);
+      output.textContent =
+        "Found " + (data.devices || []).length +
+        " HID device(s). Select one to test or capture.";
+    })
+    .catch(function(err) {
+      output.textContent = String(err);
+    });
+}
+
 function refreshStatus() {
   fetch("/api/status")
     .then(r => r.json())
@@ -568,6 +891,70 @@ function pollSamples() {
     });
 }
 
+
+document.getElementById("scanBtn").onclick = scanDevices;
+
+document.getElementById("testDeviceBtn").onclick = function() {
+  const output = document.getElementById("diagOutput");
+  if (!diagnosticDevice) {
+    output.textContent = "Select a device first.";
+    return;
+  }
+
+  output.textContent = "Testing access to " + deviceName(diagnosticDevice) + "…";
+  post("diag_test", {path: diagnosticDevice.path_token}).then(function(result) {
+    if (!result.ok) throw new Error(result.error || "Device test failed.");
+    diagnosticText =
+      "Opened successfully.\n" +
+      deviceName(diagnosticDevice) + "\n" +
+      diagnosticDevice.vendor_hex + ":" + diagnosticDevice.product_hex;
+    output.textContent = diagnosticText;
+  }).catch(function(err) {
+    output.textContent = String(err);
+  });
+};
+
+document.getElementById("captureDeviceBtn").onclick = function() {
+  const output = document.getElementById("diagOutput");
+  if (!diagnosticDevice) {
+    output.textContent = "Select a device first.";
+    return;
+  }
+
+  const seconds = Number(document.getElementById("captureSeconds").value || 5);
+  output.textContent =
+    "Capturing " + seconds + " seconds from " + deviceName(diagnosticDevice) + "…";
+
+  post("diag_capture", {
+    path: diagnosticDevice.path_token,
+    seconds: seconds
+  }).then(function(result) {
+    if (!result.ok) throw new Error(result.error || "Capture failed.");
+    diagnosticText = result.result.summary || "";
+    output.textContent = diagnosticText +
+      "\n\nSaved locally: " + result.result.saved_path;
+  }).catch(function(err) {
+    output.textContent = String(err);
+  });
+};
+
+document.getElementById("copyDiagBtn").onclick = function() {
+  const output = document.getElementById("diagOutput");
+  const text = diagnosticText || output.textContent;
+  if (!text) return;
+
+  navigator.clipboard.writeText(text).then(function() {
+    const old = output.textContent;
+    output.textContent = old + "\n\n[Copied to clipboard]";
+  }).catch(function() {
+    output.textContent += "\n\nClipboard access failed. Select the text above and copy it manually.";
+  });
+};
+
+document.getElementById("captureFolderBtn").onclick = function() {
+  post("reveal_captures");
+};
+
 document.getElementById("runBtn").onclick = function() {
   fetch("/api/status").then(r => r.json()).then(function(s) {
     return post(s.running ? "stop" : "start");
@@ -598,6 +985,7 @@ window.addEventListener("resize", function() {
 });
 
 refreshStatus();
+scanDevices();
 setInterval(refreshStatus, 1000);
 setInterval(pollSamples, 100);
 </script>
@@ -638,6 +1026,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(STATE.status())
             return
 
+        if parsed.path == "/api/devices":
+            self.send_json({"devices": hid_device_list()})
+            return
+
         if parsed.path == "/api/samples":
             query = urllib.parse.parse_qs(parsed.query)
             try:
@@ -669,6 +1061,19 @@ class Handler(BaseHTTPRequestHandler):
                 STATE.stop_recording()
             elif action == "reveal_recordings":
                 STATE.reveal_recordings()
+            elif action == "reveal_captures":
+                STATE.reveal_captures()
+            elif action == "diag_test":
+                result = test_hid_device(str(payload.get("path") or ""))
+                self.send_json({"ok": True, "result": result})
+                return
+            elif action == "diag_capture":
+                result = capture_hid_device(
+                    str(payload.get("path") or ""),
+                    float(payload.get("seconds") or 5),
+                )
+                self.send_json({"ok": True, "result": result})
+                return
             elif action == "osc":
                 STATE.set_osc(
                     bool(payload.get("enabled")),
