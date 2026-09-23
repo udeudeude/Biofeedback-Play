@@ -91,6 +91,35 @@ def decode_hid_path(token: str) -> bytes:
     return base64.urlsafe_b64decode(token.encode("ascii"))
 
 
+def hid_is_obviously_unrelated(
+    manufacturer: str, product_name: str, known: str = ""
+) -> tuple[bool, str]:
+    if known:
+        return False, ""
+
+    text = f"{manufacturer} {product_name}".strip().lower()
+    obvious_terms = {
+        "keyboard": "keyboard",
+        "trackpad": "trackpad",
+        "mouse": "mouse",
+        "touch bar": "Touch Bar",
+        "facetime": "camera",
+        "camera": "camera",
+        "headset": "headset controls",
+        "usb storage": "storage",
+        "storage": "storage",
+        "usb hub": "USB hub",
+        "backlight": "display/backlight",
+        "ambient light sensor": "computer ambient-light sensor",
+        "apple t2 controller": "computer controller",
+    }
+    for term, reason in obvious_terms.items():
+        if term in text:
+            return True, reason
+
+    return False, ""
+
+
 def hid_device_list() -> list[dict]:
     devices: list[dict] = []
     for item in hid.enumerate():
@@ -108,6 +137,10 @@ def hid_device_list() -> list[dict]:
             known = "Wild Divine Lightstone"
         elif vendor == 0x0E30 and product == 0x0002:
             known = "HeartMath emWave Pulse Sensor"
+
+        obviously_unrelated, hidden_reason = hid_is_obviously_unrelated(
+            manufacturer, product_name, known
+        )
 
         if isinstance(path, str):
             path_bytes = path.encode("utf-8")
@@ -133,6 +166,8 @@ def hid_device_list() -> list[dict]:
                 "interface_number": int(item.get("interface_number") or 0),
                 "bus_type": int(item.get("bus_type") or 0),
                 "known": known,
+                "obviously_unrelated": obviously_unrelated,
+                "hidden_reason": hidden_reason,
             }
         )
 
@@ -630,7 +665,13 @@ canvas {
           <div class="label">Devices & diagnostics</div>
           <div class="small">Scan USB HID hardware, test access, and make short raw captures without Terminal.</div>
         </div>
-        <button id="scanBtn">Scan devices</button>
+        <div class="row">
+          <label class="small" style="margin-top:0">
+            <input id="showAllDevices" type="checkbox">
+            Show obviously unrelated HID devices
+          </label>
+          <button id="scanBtn">Scan devices</button>
+        </div>
       </div>
 
       <div id="deviceList"></div>
@@ -753,6 +794,7 @@ function draw(canvas, values, stroke, rangeEl) {
 
 let diagnosticDevice = null;
 let diagnosticText = "";
+let diagnosticDevices = [];
 
 function escapeHtml(value) {
   return String(value == null ? "" : value)
@@ -777,20 +819,45 @@ function selectDiagnosticDevice(d, row) {
 }
 
 function renderDevices(devices) {
+  diagnosticDevices = devices || [];
   const host = document.getElementById("deviceList");
-  if (!devices.length) {
+  const showAll = document.getElementById("showAllDevices").checked;
+  const visibleDevices = showAll
+    ? diagnosticDevices
+    : diagnosticDevices.filter(function(d) { return !d.obviously_unrelated; });
+  const hiddenCount = diagnosticDevices.length - visibleDevices.length;
+
+  if (!diagnosticDevices.length) {
     host.innerHTML = '<div class="small">No HID devices were found.</div>';
     return;
   }
 
-  let html = '<table class="device-table"><thead><tr>' +
+  if (!visibleDevices.length) {
+    host.innerHTML =
+      '<div class="small">No likely or unclassified devices are visible. ' +
+      hiddenCount + ' obviously unrelated device(s) are hidden. ' +
+      'Turn on “Show obviously unrelated HID devices” to inspect them.</div>';
+    return;
+  }
+
+  let html = '';
+  if (hiddenCount > 0) {
+    html += '<div class="small">' + hiddenCount +
+      ' obviously unrelated HID device(s) hidden.</div>';
+  }
+
+  html += '<table class="device-table"><thead><tr>' +
     '<th>Device</th><th>Manufacturer</th><th>USB ID</th>' +
     '<th>Usage</th><th></th></tr></thead><tbody>';
 
-  devices.forEach(function(d, index) {
+  visibleDevices.forEach(function(d, index) {
+    const hiddenNote = d.obviously_unrelated && d.hidden_reason
+      ? '<div class="small">Normally hidden: ' + escapeHtml(d.hidden_reason) + '</div>'
+      : '';
     html += '<tr data-device-index="' + index + '">' +
       '<td><strong>' + escapeHtml(deviceName(d)) + '</strong>' +
       (d.known ? '<div class="small">' + escapeHtml(d.product) + '</div>' : '') +
+      hiddenNote +
       '</td>' +
       '<td>' + escapeHtml(d.manufacturer || "—") + '</td>' +
       '<td><code>' + escapeHtml(d.vendor_hex + ":" + d.product_hex) + '</code></td>' +
@@ -806,16 +873,16 @@ function renderDevices(devices) {
   host.querySelectorAll("tr[data-device-index]").forEach(function(row) {
     const index = Number(row.dataset.deviceIndex);
     row.querySelector(".select-device").onclick = function() {
-      selectDiagnosticDevice(devices[index], row);
+      selectDiagnosticDevice(visibleDevices[index], row);
     };
   });
 
-  const emwaveIndex = devices.findIndex(function(d) {
+  const emwaveIndex = visibleDevices.findIndex(function(d) {
     return d.vendor_id === 0x0e30 && d.product_id === 0x0002;
   });
   if (emwaveIndex >= 0) {
     const row = host.querySelector('tr[data-device-index="' + emwaveIndex + '"]');
-    selectDiagnosticDevice(devices[emwaveIndex], row);
+    selectDiagnosticDevice(visibleDevices[emwaveIndex], row);
   }
 }
 
@@ -825,10 +892,15 @@ function scanDevices() {
   fetch("/api/devices")
     .then(r => r.json())
     .then(function(data) {
-      renderDevices(data.devices || []);
+      diagnosticDevices = data.devices || [];
+      renderDevices(diagnosticDevices);
+      const hidden = diagnosticDevices.filter(function(d) {
+        return d.obviously_unrelated;
+      }).length;
       output.textContent =
-        "Found " + (data.devices || []).length +
-        " HID device(s). Select one to test or capture.";
+        "Found " + diagnosticDevices.length + " HID device(s)." +
+        (hidden ? " " + hidden + " obviously unrelated device(s) hidden by default." : "") +
+        " Select one to test or capture.";
     })
     .catch(function(err) {
       output.textContent = String(err);
@@ -893,6 +965,9 @@ function pollSamples() {
 
 
 document.getElementById("scanBtn").onclick = scanDevices;
+document.getElementById("showAllDevices").onchange = function() {
+  renderDevices(diagnosticDevices);
+};
 
 document.getElementById("testDeviceBtn").onclick = function() {
   const output = document.getElementById("diagOutput");
