@@ -82,3 +82,11 @@ Known devices so far:
 
 - Wild Divine Lightstone: 0x14FA:0x0001
 - HeartMath emWave Pulse Sensor: 0x0E30:0x0002
+
+## HeartMath emWave live support
+
+Biofeedback Play can now open the emWave USB module directly and display its raw pulse waveform in real time. The currently observed packet format yields six 8-bit pulse samples per HID report. The app tracks packet-counter gaps and can send each raw sample over OSC as:
+
+    /biofeedback/emwave/pulse_raw
+
+The emWave decoding remains explicitly experimental until the packet semantics and sample timing are independently documented.
