@@ -1,9 +1,19 @@
 import unittest
 
-from biofeedback_play import capture_summary, hid_is_obviously_unrelated
+from biofeedback_play import EmWaveParser, capture_summary, hid_is_obviously_unrelated
 
 
 class DiagnosticsTests(unittest.TestCase):
+    def test_emwave_report_parser(self):
+        parser = EmWaveParser()
+        first = parser.feed_report([0x01, 0x98, 0x4C, 0x4B, 0x49, 0x46, 0x45, 0x46])
+        second = parser.feed_report([0x01, 0x99, 0x48, 0x49, 0x46, 0x44, 0x45, 0x46])
+        self.assertEqual(first["counter"], 0x98)
+        self.assertEqual(first["samples"], [0x4C, 0x4B, 0x49, 0x46, 0x45, 0x46])
+        self.assertEqual(first["gap"], 0)
+        self.assertEqual(second["gap"], 0)
+
+
     def test_capture_summary_formats_reports(self):
         capture = {
             "device": {
