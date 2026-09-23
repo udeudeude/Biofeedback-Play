@@ -6,3 +6,4 @@ recordings/*.csv
 !recordings/.gitkeep
 captures/*.json
 !captures/.gitkeep
+settings.json
