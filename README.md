@@ -126,3 +126,37 @@ The interface opens at:
 Hardware-specific readers feed a shared device/signal model. Visualization, audio feedback, recording, OSC, future MIDI output, and later experiments consume those signals rather than being hard-coded to one piece of hardware.
 
 Derived physiology remains conservative. Raw signals come first; heart-rate detection, smoothing, calibration, signal quality, spectral analysis, and other derived measurements should remain explicit layers rather than silently changing source data.
+
+
+## Muse 2014 / MU-01
+
+Biofeedback Play now includes an experimental adapter for the first-generation InteraXon Muse MU-01.
+
+The MU-01 uses classic Bluetooth RFCOMM rather than Bluetooth Low Energy. On macOS the current adapter expects the paired headband to appear as a virtual serial port under /dev/cu.*.
+
+Device setup includes Muse-specific controls to:
+
+- open macOS Bluetooth Settings
+- scan serial ports
+- identify likely Muse ports
+- save the selected port
+- start or stop Muse acquisition
+
+If exactly one serial port is clearly named as a Muse, Biofeedback Play can select it automatically.
+
+Current live Muse panels:
+
+- EEG TP9
+- EEG FP1
+- EEG FP2
+- EEG TP10
+- head motion X
+- head motion Y
+- head motion Z
+
+The EEG stream is treated as nominally 500 Hz using preset AD. Accelerometer data is treated as nominally 50 Hz. EEG microvolt scaling is explicitly experimental; accelerometer values are kept as raw signed 10-bit counts. Battery telemetry and AFE gain are shown in Device setup.
+
+The Muse protocol adapter is based on the clean-room, MIT-licensed Muse 2014 implementation by Matthew Piercey:
+https://github.com/mtpiercey/muse-2014-lsl
+
+If modern macOS does not expose a usable RFCOMM virtual serial port after pairing, the next fallback is a native IOBluetooth bridge rather than asking the user to operate the protocol manually from Terminal.
