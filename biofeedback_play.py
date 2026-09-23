@@ -2064,6 +2064,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"devices": hid_device_list()})
             return
 
+        if parsed.path == "/api/muse_ports":
+            ports = list_muse_serial_ports()
+            current = STATE.status().get("muse_port") or ""
+            self.send_json({"ports": ports, "current": current})
+            return
+
         if parsed.path == "/api/samples":
             query = urllib.parse.parse_qs(parsed.query)
             try:
@@ -2114,6 +2120,10 @@ class Handler(BaseHTTPRequestHandler):
                 STATE.reveal_recordings()
             elif action == "reveal_captures":
                 STATE.reveal_captures()
+            elif action == "muse_set_port":
+                STATE.set_muse_port(str(payload.get("port") or ""))
+            elif action == "open_bluetooth_settings":
+                STATE.open_bluetooth_settings()
             elif action == "diag_test":
                 result = test_hid_device(str(payload.get("path") or ""))
                 self.send_json({"ok": True, "result": result})
