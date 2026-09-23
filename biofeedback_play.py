@@ -22,6 +22,9 @@ import hid
 
 VENDOR_ID = 0x14FA
 PRODUCT_ID = 0x0001
+EMWAVE_VENDOR_ID = 0x0E30
+EMWAVE_PRODUCT_ID = 0x0002
+EMWAVE_NOMINAL_SAMPLE_RATE = 375.0
 HOST = "127.0.0.1"
 PORT = 8765
 
@@ -30,6 +33,36 @@ RECORDINGS = ROOT / "recordings"
 RECORDINGS.mkdir(exist_ok=True)
 CAPTURES = ROOT / "captures"
 CAPTURES.mkdir(exist_ok=True)
+
+
+class EmWaveParser:
+    """Experimental parser based on captures from emWave USB 0x0E30:0x0002.
+
+    Observed reports are 8 bytes:
+      byte 0: constant report marker 0x01
+      byte 1: packet counter, incrementing modulo 256
+      bytes 2..7: six consecutive 8-bit pulse waveform samples
+    """
+
+    def __init__(self) -> None:
+        self.last_counter: int | None = None
+
+    def feed_report(self, report: list[int]) -> dict | None:
+        if len(report) < 8 or int(report[0]) != 0x01:
+            return None
+
+        counter = int(report[1]) & 0xFF
+        gap = 0
+        if self.last_counter is not None:
+            expected = (self.last_counter + 1) & 0xFF
+            gap = (counter - expected) & 0xFF
+        self.last_counter = counter
+
+        return {
+            "counter": counter,
+            "gap": gap,
+            "samples": [int(value) & 0xFF for value in report[2:8]],
+        }
 
 
 class LightstoneParser:
@@ -137,7 +170,7 @@ def hid_device_list() -> list[dict]:
         known = ""
         if vendor == VENDOR_ID and product == PRODUCT_ID:
             known = "Wild Divine Lightstone"
-        elif vendor == 0x0E30 and product == 0x0002:
+        elif vendor == EMWAVE_VENDOR_ID and product == EMWAVE_PRODUCT_ID:
             known = "HeartMath emWave Pulse Sensor"
 
         obviously_unrelated, hidden_reason = hid_is_obviously_unrelated(
@@ -247,6 +280,18 @@ def capture_hid_device(token: str, seconds: float = 5.0) -> dict:
                 "Stop acquisition before making a raw diagnostic capture of it."
             )
 
+    if (
+        meta["vendor_id"] == EMWAVE_VENDOR_ID
+        and meta["product_id"] == EMWAVE_PRODUCT_ID
+        and STATE is not None
+    ):
+        emwave = STATE.status()
+        if emwave["emwave_running"] and emwave["emwave_connected"]:
+            raise RuntimeError(
+                "The emWave is already open for live acquisition. "
+                "Stop emWave acquisition before making a raw diagnostic capture of it."
+            )
+
     device = hid.device()
     reports: list[dict] = []
     started_wall = time.time()
@@ -328,11 +373,28 @@ class BiofeedbackState:
         self.thread = threading.Thread(target=self._reader_loop, daemon=True)
         self.thread.start()
 
+        self.emwave_running = True
+        self.emwave_connected = False
+        self.emwave_last_error = ""
+        self.emwave_seq = 0
+        self.emwave_packet_count = 0
+        self.emwave_gap_count = 0
+        self.emwave_samples = deque(maxlen=12000)
+        self.emwave_parser = EmWaveParser()
+        self.emwave_thread = threading.Thread(target=self._emwave_reader_loop, daemon=True)
+        self.emwave_thread.start()
+
     def set_running(self, value: bool) -> None:
         with self.lock:
             self.running = bool(value)
             if not self.running:
                 self.connected = False
+
+    def set_emwave_running(self, value: bool) -> None:
+        with self.lock:
+            self.emwave_running = bool(value)
+            if not self.emwave_running:
+                self.emwave_connected = False
 
     def set_osc(self, enabled: bool, host: str | None = None, port: int | None = None) -> None:
         with self.lock:
@@ -394,11 +456,53 @@ class BiofeedbackState:
                 "osc_enabled": self.osc_enabled,
                 "osc_host": self.osc_host,
                 "osc_port": self.osc_port,
+                "emwave_running": self.emwave_running,
+                "emwave_connected": self.emwave_connected,
+                "emwave_last_error": self.emwave_last_error,
+                "emwave_latest": self.emwave_samples[-1] if self.emwave_samples else None,
+                "emwave_sample_count": self.emwave_seq,
+                "emwave_packet_count": self.emwave_packet_count,
+                "emwave_gap_count": self.emwave_gap_count,
             }
 
     def samples_after(self, seq: int) -> list[dict]:
         with self.lock:
             return [sample for sample in self.samples if sample["seq"] > seq][-300:]
+
+    def emwave_samples_after(self, seq: int) -> list[dict]:
+        with self.lock:
+            return [
+                sample for sample in self.emwave_samples if sample["seq"] > seq
+            ][-1200:]
+
+    def _store_emwave_packet(self, parsed: dict) -> None:
+        packet_time = time.monotonic() - self.started_monotonic
+        sample_period = 1.0 / EMWAVE_NOMINAL_SAMPLE_RATE
+
+        with self.lock:
+            self.emwave_packet_count += 1
+            self.emwave_gap_count += int(parsed.get("gap") or 0)
+
+            values = parsed["samples"]
+            for index, value in enumerate(values):
+                self.emwave_seq += 1
+                sample = {
+                    "seq": self.emwave_seq,
+                    "t": packet_time - (len(values) - 1 - index) * sample_period,
+                    "pulse": int(value),
+                    "packet": int(parsed["counter"]),
+                }
+                self.emwave_samples.append(sample)
+
+                if self.osc_enabled:
+                    target = (self.osc_host, self.osc_port)
+                    try:
+                        self.osc_socket.sendto(
+                            osc_message("/biofeedback/emwave/pulse_raw", int(value)),
+                            target,
+                        )
+                    except OSError as exc:
+                        self.emwave_last_error = "OSC: " + str(exc)
 
     def _store_sample(self, skin: int, pulse: int) -> None:
         now_unix = time.time()
@@ -478,6 +582,65 @@ class BiofeedbackState:
                 with self.lock:
                     self.connected = False
                     self.last_error = str(exc)
+                if device is not None:
+                    try:
+                        device.close()
+                    except Exception:
+                        pass
+                    device = None
+                time.sleep(1.0)
+
+        if device is not None:
+            try:
+                device.close()
+            except Exception:
+                pass
+
+    def _emwave_reader_loop(self) -> None:
+        device = None
+
+        while not self.shutdown:
+            with self.lock:
+                should_run = self.emwave_running
+
+            if not should_run:
+                if device is not None:
+                    try:
+                        device.close()
+                    except Exception:
+                        pass
+                    device = None
+                time.sleep(0.1)
+                continue
+
+            try:
+                if device is None:
+                    if not hid.enumerate(EMWAVE_VENDOR_ID, EMWAVE_PRODUCT_ID):
+                        with self.lock:
+                            self.emwave_connected = False
+                            self.emwave_last_error = ""
+                        time.sleep(1.0)
+                        continue
+
+                    device = hid.device()
+                    device.open(EMWAVE_VENDOR_ID, EMWAVE_PRODUCT_ID)
+                    with self.lock:
+                        self.emwave_connected = True
+                        self.emwave_last_error = ""
+                        self.emwave_parser = EmWaveParser()
+
+                report = device.read(8, 500)
+                if not report:
+                    continue
+
+                parsed = self.emwave_parser.feed_report(report)
+                if parsed is not None:
+                    self._store_emwave_packet(parsed)
+
+            except Exception as exc:
+                with self.lock:
+                    self.emwave_connected = False
+                    self.emwave_last_error = str(exc)
                 if device is not None:
                     try:
                         device.close()
@@ -662,11 +825,31 @@ canvas {
         <button id="oscApply">Apply</button>
       </div>
       <div class="small">
-        Sends /biofeedback/lightstone/skin_raw and /biofeedback/lightstone/pulse_raw.
-        Default SuperCollider language port is usually 57120.
+        Sends /biofeedback/lightstone/skin_raw, /biofeedback/lightstone/pulse_raw,
+        and /biofeedback/emwave/pulse_raw. Default SuperCollider language port is usually 57120.
       </div>
     </section>
 
+
+
+    <section class="card chart">
+      <div class="charthead">
+        <div>
+          <div class="label">HeartMath emWave pulse waveform</div>
+          <div class="small">Experimental direct USB decoding. Each observed HID report carries six 8-bit waveform samples.</div>
+        </div>
+        <div class="row">
+          <span class="status"><span id="emwaveDot" class="dot"></span><span id="emwaveStatus">Waiting for emWave</span></span>
+          <button id="emwaveRunBtn">Stop emWave</button>
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <div><span class="label">Pulse raw</span> <strong id="emwaveValue">—</strong></div>
+        <div><span class="label">Samples</span> <strong id="emwaveSampleValue">0</strong></div>
+        <div><span class="label">Packet gaps</span> <strong id="emwaveGapValue">0</strong></div>
+      </div>
+      <canvas id="emwaveChart"></canvas>
+    </section>
 
     <section class="card diagnostics">
       <div class="charthead">
@@ -730,7 +913,10 @@ let lastSeq = 0;
 let totalSamples = 0;
 const skin = [];
 const pulse = [];
+let emwaveLastSeq = 0;
+const emwavePulse = [];
 const maxPoints = 620;
+const emwaveMaxPoints = 1500;
 
 function trim(a) {
   if (a.length > maxPoints) a.splice(0, a.length - maxPoints);
@@ -938,6 +1124,22 @@ function refreshStatus() {
       document.getElementById("oscHost").value = s.osc_host;
       document.getElementById("oscPort").value = s.osc_port;
       document.getElementById("error").textContent = s.last_error || "";
+
+      const emwaveDot = document.getElementById("emwaveDot");
+      emwaveDot.className = s.emwave_connected ? "dot on" : "dot";
+      const emwaveStatus = document.getElementById("emwaveStatus");
+      if (!s.emwave_running) emwaveStatus.textContent = "emWave stopped";
+      else if (s.emwave_connected) emwaveStatus.textContent = "emWave connected";
+      else emwaveStatus.textContent = "Waiting for emWave";
+
+      const emwaveBtn = document.getElementById("emwaveRunBtn");
+      emwaveBtn.textContent = s.emwave_running ? "Stop emWave" : "Start emWave";
+      emwaveBtn.className = s.emwave_running ? "primary" : "";
+      document.getElementById("emwaveSampleValue").textContent = s.emwave_sample_count || 0;
+      document.getElementById("emwaveGapValue").textContent = s.emwave_gap_count || 0;
+      if (s.emwave_latest) {
+        document.getElementById("emwaveValue").textContent = s.emwave_latest.pulse;
+      }
     })
     .catch(function(err) {
       document.getElementById("error").textContent = String(err);
@@ -972,6 +1174,34 @@ function pollSamples() {
     });
 }
 
+
+
+function pollEmWaveSamples() {
+  fetch("/api/emwave_samples?after=" + emwaveLastSeq)
+    .then(r => r.json())
+    .then(function(data) {
+      data.samples.forEach(function(s) {
+        emwaveLastSeq = Math.max(emwaveLastSeq, s.seq);
+        emwavePulse.push(s.pulse);
+      });
+      if (emwavePulse.length > emwaveMaxPoints) {
+        emwavePulse.splice(0, emwavePulse.length - emwaveMaxPoints);
+      }
+      if (data.samples.length) {
+        const latest = data.samples[data.samples.length - 1];
+        document.getElementById("emwaveValue").textContent = latest.pulse;
+      }
+      draw(
+        document.getElementById("emwaveChart"),
+        emwavePulse,
+        "#c4b5fd",
+        { textContent: "" }
+      );
+    })
+    .catch(function(err) {
+      document.getElementById("error").textContent = String(err);
+    });
+}
 
 document.getElementById("scanBtn").onclick = scanDevices;
 document.getElementById("showAllDevices").onchange = function() {
@@ -1039,6 +1269,12 @@ document.getElementById("captureFolderBtn").onclick = function() {
   post("reveal_captures");
 };
 
+document.getElementById("emwaveRunBtn").onclick = function() {
+  fetch("/api/status").then(r => r.json()).then(function(s) {
+    return post(s.emwave_running ? "emwave_stop" : "emwave_start");
+  }).then(refreshStatus);
+};
+
 document.getElementById("runBtn").onclick = function() {
   fetch("/api/status").then(r => r.json()).then(function(s) {
     return post(s.running ? "stop" : "start");
@@ -1066,12 +1302,14 @@ document.getElementById("oscApply").onclick = function() {
 window.addEventListener("resize", function() {
   draw(document.getElementById("skinChart"), skin, "#7dd3fc", document.getElementById("skinRange"));
   draw(document.getElementById("pulseChart"), pulse, "#f9a8d4", document.getElementById("pulseRange"));
+  draw(document.getElementById("emwaveChart"), emwavePulse, "#c4b5fd", { textContent: "" });
 });
 
 refreshStatus();
 scanDevices();
 setInterval(refreshStatus, 1000);
 setInterval(pollSamples, 100);
+setInterval(pollEmWaveSamples, 100);
 </script>
 </body>
 </html>
@@ -1123,6 +1361,15 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"samples": STATE.samples_after(after)})
             return
 
+        if parsed.path == "/api/emwave_samples":
+            query = urllib.parse.parse_qs(parsed.query)
+            try:
+                after = int(query.get("after", ["0"])[0])
+            except ValueError:
+                after = 0
+            self.send_json({"samples": STATE.emwave_samples_after(after)})
+            return
+
         self.send_error(404)
 
     def do_POST(self) -> None:
@@ -1137,6 +1384,10 @@ class Handler(BaseHTTPRequestHandler):
 
             if action == "start":
                 STATE.set_running(True)
+            elif action == "emwave_start":
+                STATE.set_emwave_running(True)
+            elif action == "emwave_stop":
+                STATE.set_emwave_running(False)
             elif action == "stop":
                 STATE.set_running(False)
             elif action == "record_start":
@@ -1183,6 +1434,7 @@ def main() -> None:
     print("Biofeedback Play")
     print("Open:", url)
     print("Lightstone USB: 14FA:0001")
+    print("HeartMath emWave USB: 0E30:0002")
     print("Press Control-C here to quit.")
 
     threading.Timer(0.6, lambda: webbrowser.open(url)).start()
