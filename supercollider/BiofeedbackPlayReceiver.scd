@@ -4,7 +4,8 @@
 
 ~biofeedback = (
     skinRaw: 0,
-    pulseRaw: 0
+    pulseRaw: 0,
+    emWavePulseRaw: 0
 );
 
 OSCdef(\biofeedbackSkin, { |msg|
@@ -15,6 +16,10 @@ OSCdef(\biofeedbackPulse, { |msg|
     ~biofeedback[\pulseRaw] = msg[1].asInteger;
 }, '/biofeedback/lightstone/pulse_raw');
 
+OSCdef(\biofeedbackEmWave, { |msg|
+    ~biofeedback[\emWavePulseRaw] = msg[1].asInteger;
+}, '/biofeedback/emwave/pulse_raw');
+
 "Biofeedback Play OSC receiver ready.".postln;
 )
 
@@ -24,3 +29,4 @@ OSCdef(\biofeedbackPulse, { |msg|
 // Stop listening later with:
 // OSCdef(\biofeedbackSkin).free;
 // OSCdef(\biofeedbackPulse).free;
+// OSCdef(\biofeedbackEmWave).free;
