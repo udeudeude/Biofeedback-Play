@@ -1525,6 +1525,27 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(STATE.status())
             return
 
+        if parsed.path == "/api/catalog":
+            self.send_json(
+                {
+                    "devices": STATE.device_catalog(),
+                    "signals": STATE.signal_catalog(),
+                }
+            )
+            return
+
+        if parsed.path == "/api/signal_samples":
+            query = urllib.parse.parse_qs(parsed.query)
+            signal_id = query.get("id", [""])[0]
+            try:
+                after = int(query.get("after", ["0"])[0])
+            except ValueError:
+                after = 0
+            self.send_json(
+                {"samples": STATE.signal_samples_after(signal_id, after)}
+            )
+            return
+
         if parsed.path == "/api/devices":
             self.send_json({"devices": hid_device_list()})
             return
@@ -1559,7 +1580,11 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length) or b"{}")
             action = payload.get("action")
 
-            if action == "start":
+            if action == "device_start":
+                STATE.set_device_running(str(payload.get("device_id") or ""), True)
+            elif action == "device_stop":
+                STATE.set_device_running(str(payload.get("device_id") or ""), False)
+            elif action == "start":
                 STATE.set_running(True)
             elif action == "emwave_start":
                 STATE.set_emwave_running(True)
