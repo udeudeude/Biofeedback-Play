@@ -86,6 +86,12 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("kind-badge", HTML)
         self.assertIn("source-chip", HTML)
 
+    def test_ui_supports_persistent_panel_reordering(self):
+        self.assertIn('draggable="true"', HTML)
+        self.assertIn("Drag to rearrange", HTML)
+        self.assertIn("biofeedbackPlay.panelOrder.v1", HTML)
+        self.assertIn("Reset panel order", HTML)
+
 
 if __name__ == "__main__":
     unittest.main()
