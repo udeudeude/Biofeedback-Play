@@ -45,6 +45,7 @@ The live workspace uses a consistent visual grammar:
 - live panels sort ahead of disconnected panels
 - disconnected panels stay compact instead of stretching to match a neighboring live panel
 - the toolbar can filter the workspace to All, Direct, Calculated, or Comparisons
+- panels can be rearranged by dragging their ⠿ handle; the custom order is remembered in the browser and can be reset from the toolbar
 
 These distinctions are intentionally secondary to the signal names and values: they should help orientation without turning the dashboard into a color-key puzzle.
 
