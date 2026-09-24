@@ -2,6 +2,7 @@ import unittest
 
 from biofeedback_play import (
     EmWaveParser,
+    HTML,
     SIGNAL_DEFINITIONS,
     capture_summary,
     emwave_device_id,
@@ -76,6 +77,14 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("emwave2.heart_rate", SIGNAL_DEFINITIONS)
         self.assertIn("comparison.emwave1_emwave2.beat_offset", SIGNAL_DEFINITIONS)
         self.assertIn("comparison.emwave1_emwave2.amplitude_ratio", SIGNAL_DEFINITIONS)
+
+    def test_ui_marks_direct_calculated_and_sources(self):
+        self.assertIn('data-signal-filter="direct"', HTML)
+        self.assertIn('data-signal-filter="calculated"', HTML)
+        self.assertIn('data-signal-filter="comparison"', HTML)
+        self.assertIn("Data from", HTML)
+        self.assertIn("kind-badge", HTML)
+        self.assertIn("source-chip", HTML)
 
 
 if __name__ == "__main__":
