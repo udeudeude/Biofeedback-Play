@@ -45,6 +45,16 @@ CAPTURES = ROOT / "captures"
 CAPTURES.mkdir(exist_ok=True)
 SETTINGS_PATH = ROOT / "settings.json"
 
+# hidapi's macOS backend uses native IOKit objects. Keep enumeration serialized:
+# concurrent hid.enumerate() calls from multiple background threads can abort the
+# entire Python process instead of raising a Python exception.
+HID_ENUM_LOCK = threading.Lock()
+
+
+def safe_hid_enumerate(vendor_id: int = 0, product_id: int = 0) -> list[dict]:
+    with HID_ENUM_LOCK:
+        return list(hid.enumerate(vendor_id, product_id))
+
 
 def load_settings() -> dict:
     try:
@@ -662,7 +672,7 @@ def hid_is_obviously_unrelated(
 
 def hid_device_list() -> list[dict]:
     devices: list[dict] = []
-    for item in hid.enumerate():
+    for item in safe_hid_enumerate():
         path = item.get("path")
         if path is None:
             continue
@@ -725,7 +735,7 @@ def hid_device_list() -> list[dict]:
 
 def emwave_hid_paths() -> list[bytes]:
     paths: list[bytes] = []
-    for item in hid.enumerate(EMWAVE_VENDOR_ID, EMWAVE_PRODUCT_ID):
+    for item in safe_hid_enumerate(EMWAVE_VENDOR_ID, EMWAVE_PRODUCT_ID):
         path = item.get("path")
         if path is None:
             continue
@@ -898,8 +908,6 @@ class BiofeedbackState:
         self.emwave_gap_count = 0
         self.emwave_samples = deque(maxlen=36000)
         self.emwave_parser = EmWaveParser()
-        self.emwave_thread = threading.Thread(target=self._emwave_reader_loop, daemon=True)
-        self.emwave_thread.start()
 
         self.emwave_extra_units = {}
         for unit_number in range(2, 5):
@@ -916,12 +924,13 @@ class BiofeedbackState:
                 "parser": EmWaveParser(),
             }
             self.emwave_extra_units[unit_number] = runtime
-            runtime["thread"] = threading.Thread(
-                target=self._emwave_extra_reader_loop,
-                args=(unit_number,),
-                daemon=True,
-            )
-            runtime["thread"].start()
+
+        # One native HID worker owns every emWave. This avoids several threads
+        # simultaneously enumerating/opening HID devices through macOS IOKit.
+        self.emwave_thread = threading.Thread(
+            target=self._emwave_manager_loop, daemon=True
+        )
+        self.emwave_thread.start()
 
         settings = load_settings()
         self.muse_running = True
@@ -1701,7 +1710,7 @@ class BiofeedbackState:
 
             try:
                 if device is None:
-                    if not hid.enumerate(VENDOR_ID, PRODUCT_ID):
+                    if not safe_hid_enumerate(VENDOR_ID, PRODUCT_ID):
                         with self.lock:
                             self.connected = False
                             self.last_error = ""
@@ -1788,168 +1797,143 @@ class BiofeedbackState:
                 with self.lock:
                     self.muse_connected = False
 
-    def _emwave_reader_loop(self) -> None:
-        device = None
-        active_path = None
+    def _emwave_manager_loop(self) -> None:
+        """Own all emWave HID handles in one thread.
 
-        while not self.shutdown:
+        hidapi on macOS crosses into IOKit. Keeping enumeration, open/close, and
+        reads for identical emWave devices in one worker avoids native races that
+        can terminate Python with SIGABRT rather than a catchable exception.
+        """
+
+        devices: dict[int, hid.device] = {}
+        active_paths: dict[int, bytes] = {}
+        next_scan = 0.0
+
+        def runtime_for(unit_number: int):
+            if unit_number == 1:
+                return None
+            return self.emwave_extra_units[unit_number]
+
+        def should_run(unit_number: int) -> bool:
             with self.lock:
-                should_run = self.emwave_running
+                if unit_number == 1:
+                    return self.emwave_running
+                return bool(self.emwave_extra_units[unit_number]["running"])
 
-            if not should_run:
-                if device is not None:
-                    try:
-                        device.close()
-                    except Exception:
-                        pass
-                    device = None
-                    active_path = None
-                with self.lock:
-                    self.emwave_connected = False
-                time.sleep(0.1)
-                continue
-
-            try:
-                paths = emwave_hid_paths()
-                if not paths:
-                    with self.lock:
-                        self.emwave_connected = False
-                        self.emwave_last_error = ""
-                    if device is not None:
-                        try:
-                            device.close()
-                        except Exception:
-                            pass
-                        device = None
-                        active_path = None
-                    time.sleep(1.0)
-                    continue
-
-                wanted_path = paths[0]
-                if device is None or active_path != wanted_path:
-                    if device is not None:
-                        try:
-                            device.close()
-                        except Exception:
-                            pass
-                    device = hid.device()
-                    device.open_path(wanted_path)
-                    active_path = wanted_path
-                    with self.lock:
-                        self.emwave_connected = True
-                        self.emwave_last_error = ""
-                        self.emwave_parser = EmWaveParser()
-
-                report = device.read(8, 500)
-                if not report:
-                    continue
-
-                parsed = self.emwave_parser.feed_report(report)
-                if parsed is not None:
-                    self._store_emwave_packet(parsed, 1)
-
-            except Exception as exc:
-                with self.lock:
-                    self.emwave_connected = False
-                    self.emwave_last_error = str(exc)
-                if device is not None:
-                    try:
-                        device.close()
-                    except Exception:
-                        pass
-                    device = None
-                    active_path = None
-                time.sleep(1.0)
-
-        if device is not None:
-            try:
-                device.close()
-            except Exception:
-                pass
-
-    def _emwave_extra_reader_loop(self, unit_number: int) -> None:
-        device = None
-        active_path = None
-        path_index = unit_number - 1
-
-        while not self.shutdown:
-            runtime = self.emwave_extra_units[unit_number]
+        def set_disconnected(unit_number: int, error: str = "") -> None:
             with self.lock:
-                should_run = runtime["running"]
-
-            if not should_run:
-                if device is not None:
-                    try:
-                        device.close()
-                    except Exception:
-                        pass
-                    device = None
-                    active_path = None
-                with self.lock:
+                if unit_number == 1:
+                    self.emwave_connected = False
+                    self.emwave_last_error = error
+                else:
+                    runtime = self.emwave_extra_units[unit_number]
                     runtime["connected"] = False
-                time.sleep(0.1)
-                continue
+                    runtime["error"] = error
 
-            try:
-                paths = emwave_hid_paths()
-                if len(paths) <= path_index:
-                    with self.lock:
-                        runtime["connected"] = False
-                        runtime["error"] = ""
-                    if device is not None:
-                        try:
-                            device.close()
-                        except Exception:
-                            pass
-                        device = None
-                        active_path = None
-                    time.sleep(1.0)
-                    continue
-
-                wanted_path = paths[path_index]
-                with self.lock:
+        def set_connected(unit_number: int) -> None:
+            with self.lock:
+                if unit_number == 1:
+                    self.emwave_connected = True
+                    self.emwave_last_error = ""
+                    self.emwave_parser = EmWaveParser()
+                else:
+                    runtime = self.emwave_extra_units[unit_number]
+                    runtime["connected"] = True
                     runtime["seen"] = True
+                    runtime["error"] = ""
+                    runtime["parser"] = EmWaveParser()
 
-                if device is None or active_path != wanted_path:
-                    if device is not None:
+        def close_unit(unit_number: int) -> None:
+            device = devices.pop(unit_number, None)
+            active_paths.pop(unit_number, None)
+            if device is not None:
+                try:
+                    device.close()
+                except Exception:
+                    pass
+            set_disconnected(unit_number)
+
+        while not self.shutdown:
+            now = time.monotonic()
+
+            if now >= next_scan:
+                try:
+                    paths = emwave_hid_paths()
+                except Exception as exc:
+                    for unit_number in range(1, 5):
+                        set_disconnected(unit_number, str(exc))
+                    time.sleep(1.0)
+                    next_scan = time.monotonic() + 1.0
+                    continue
+
+                next_scan = now + 1.0
+
+                for unit_number in range(1, 5):
+                    path_index = unit_number - 1
+                    wanted_path = (
+                        paths[path_index]
+                        if should_run(unit_number) and path_index < len(paths)
+                        else None
+                    )
+
+                    if wanted_path is None:
+                        if unit_number in devices:
+                            close_unit(unit_number)
+                        else:
+                            set_disconnected(unit_number)
+                        continue
+
+                    if (
+                        unit_number in devices
+                        and active_paths.get(unit_number) == wanted_path
+                    ):
+                        continue
+
+                    if unit_number in devices:
+                        close_unit(unit_number)
+
+                    try:
+                        device = hid.device()
+                        device.open_path(wanted_path)
+                        # A single manager polls all handles, so no one read may
+                        # block the others.
+                        device.set_nonblocking(True)
+                        devices[unit_number] = device
+                        active_paths[unit_number] = wanted_path
+                        set_connected(unit_number)
+                    except Exception as exc:
                         try:
                             device.close()
                         except Exception:
                             pass
-                    device = hid.device()
-                    device.open_path(wanted_path)
-                    active_path = wanted_path
-                    with self.lock:
-                        runtime["connected"] = True
-                        runtime["error"] = ""
-                        runtime["parser"] = EmWaveParser()
+                        set_disconnected(unit_number, str(exc))
 
-                report = device.read(8, 500)
-                if not report:
+            for unit_number, device in list(devices.items()):
+                if not should_run(unit_number):
+                    close_unit(unit_number)
                     continue
 
-                parsed = runtime["parser"].feed_report(report)
-                if parsed is not None:
-                    self._store_emwave_packet(parsed, unit_number)
+                try:
+                    report = device.read(8)
+                    if not report:
+                        continue
 
-            except Exception as exc:
-                with self.lock:
-                    runtime["connected"] = False
-                    runtime["error"] = str(exc)
-                if device is not None:
-                    try:
-                        device.close()
-                    except Exception:
-                        pass
-                    device = None
-                    active_path = None
-                time.sleep(1.0)
+                    if unit_number == 1:
+                        parser = self.emwave_parser
+                    else:
+                        parser = runtime_for(unit_number)["parser"]
 
-        if device is not None:
-            try:
-                device.close()
-            except Exception:
-                pass
+                    parsed = parser.feed_report(report)
+                    if parsed is not None:
+                        self._store_emwave_packet(parsed, unit_number)
+                except Exception as exc:
+                    close_unit(unit_number)
+                    set_disconnected(unit_number, str(exc))
+
+            time.sleep(0.005)
+
+        for unit_number in list(devices):
+            close_unit(unit_number)
 
 
 STATE: BiofeedbackState | None = None
