@@ -2344,10 +2344,15 @@ function renderDeviceSetup(devices) {
     const statusText = !device.running ? "Acquisition stopped" :
       device.connected ? "Connected and live" : "Waiting for device";
     const statusClass = device.connected && device.running ? "dot on" : "dot";
-    const signals = (device.signals || []).map(function(signalId) {
-      const signal = catalog.signals.find(function(s) { return s.id === signalId; });
-      return '<span class="badge">' + escapeHtml(signal ? signal.name : signalId) + '</span>';
-    }).join("");
+    const deviceSignalObjects = (device.signals || []).map(function(signalId) {
+      return catalog.signals.find(function(s) { return s.id === signalId; });
+    }).filter(Boolean);
+    const rawSignals = deviceSignalObjects.filter(function(signal) { return !signal.derived; });
+    const derivedCount = deviceSignalObjects.filter(function(signal) { return signal.derived; }).length;
+    const signals = rawSignals.map(function(signal) {
+      return '<span class="badge">' + escapeHtml(signal.name) + '</span>';
+    }).join("") +
+      (derivedCount ? '<span class="badge">+' + derivedCount + ' derived panels</span>' : "");
 
     let deviceSpecific = "";
     if (device.id === "muse") {
@@ -2513,8 +2518,9 @@ function updateGlobalStatus() {
     connected.length + " device" + (connected.length === 1 ? "" : "s") +
     " connected · " + liveSignals.length + " live signal" + (liveSignals.length === 1 ? "" : "s");
 
-  document.getElementById("sessionSummary").textContent = liveSignals.length
-    ? liveSignals.map(function(s) { return s.device_name + ": " + s.name; }).join(" · ")
+  document.getElementById("sessionSummary").textContent = connected.length
+    ? connected.map(function(d) { return d.name; }).join(" · ") +
+      " · " + liveSignals.length + " live/derived signal panel" + (liveSignals.length === 1 ? "" : "s")
     : "No configured device is currently connected.";
 }
 
@@ -2605,6 +2611,16 @@ function drawAllSignals() {
   catalog.signals.forEach(drawSignal);
 }
 
+function formatSignalValue(signal, value) {
+  if (value == null || !Number.isFinite(Number(value))) return "—";
+  const numeric = Number(value);
+  let precision = signal.precision;
+  if (precision == null) {
+    precision = signal.derived ? 2 : (Number.isInteger(numeric) ? 0 : 2);
+  }
+  return numeric.toFixed(Math.max(0, Math.min(6, Number(precision))));
+}
+
 function updateSignalNumbers(signal) {
   const state = ensureSignalState(signal);
   if (!state.values.length) return;
@@ -2613,9 +2629,9 @@ function updateSignalNumbers(signal) {
   const current = recent[recent.length - 1];
   const min = Math.min.apply(null, recent);
   const max = Math.max.apply(null, recent);
-  document.getElementById("current_" + id).textContent = current;
-  document.getElementById("min_" + id).textContent = min;
-  document.getElementById("max_" + id).textContent = max;
+  document.getElementById("current_" + id).textContent = formatSignalValue(signal, current);
+  document.getElementById("min_" + id).textContent = formatSignalValue(signal, min);
+  document.getElementById("max_" + id).textContent = formatSignalValue(signal, max);
   updateAudio(signal);
 }
 
