@@ -56,6 +56,8 @@ class PhysiologyTests(unittest.TestCase):
         self.assertIsNotNone(metrics["heart_rate_difference_bpm"])
         self.assertLess(metrics["heart_rate_difference_bpm"], 2.0)
         self.assertIsNotNone(metrics["beat_offset_ms"])
+        self.assertIsNotNone(metrics["amplitude_ratio"])
+        self.assertGreater(metrics["amplitude_ratio"], 0.0)
 
 
 if __name__ == "__main__":
