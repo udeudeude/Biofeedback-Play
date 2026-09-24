@@ -2144,6 +2144,20 @@ canvas {
 }
 .filter-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
 .filter-button { padding: 6px 10px; font-size: 12px; color: var(--muted); }
+.layout-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.layout-hint { color: var(--muted); font-size: 11px; }
+.drag-handle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 27px; height: 27px; padding: 0;
+  border: 1px solid transparent; border-radius: 8px;
+  color: var(--muted); background: transparent; cursor: grab;
+  user-select: none; font-size: 17px; line-height: 1;
+}
+.drag-handle:hover { border-color: var(--line); background: rgba(255,255,255,.035); color: var(--text); }
+.drag-handle:active { cursor: grabbing; }
+.signal-panel.dragging { opacity: .42; transform: scale(.995); }
+.signal-panel.drop-before { box-shadow: 0 -3px 0 var(--accent2), 0 12px 35px rgba(0,0,0,.15); }
+.signal-panel.drop-after { box-shadow: 0 3px 0 var(--accent2), 0 12px 35px rgba(0,0,0,.15); }
 .filter-button.active { color: var(--text); background: #2b3040; border-color: #606980; }
 .legend { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .legend-item { color: var(--muted); font-size: 11px; display: inline-flex; align-items: center; gap: 5px; }
@@ -2214,16 +2228,24 @@ canvas {
       </section>
 
       <section class="signal-toolbar">
-        <div class="filter-buttons" aria-label="Signal panel filter">
-          <button class="filter-button active" data-signal-filter="all">All</button>
-          <button class="filter-button" data-signal-filter="direct">Direct</button>
-          <button class="filter-button" data-signal-filter="calculated">Calculated</button>
-          <button class="filter-button" data-signal-filter="comparison">Comparisons</button>
+        <div>
+          <div class="filter-buttons" aria-label="Signal panel filter">
+            <button class="filter-button active" data-signal-filter="all">All</button>
+            <button class="filter-button" data-signal-filter="direct">Direct</button>
+            <button class="filter-button" data-signal-filter="calculated">Calculated</button>
+            <button class="filter-button" data-signal-filter="comparison">Comparisons</button>
+          </div>
+          <div class="layout-hint" style="margin-top:7px">Drag the ⠿ handle on any panel to rearrange it. Your layout is remembered in this browser.</div>
         </div>
-        <div class="legend" aria-label="Panel legend">
-          <span class="legend-item"><span class="legend-mark"></span>Direct device data</span>
-          <span class="legend-item"><span class="legend-mark calculated"></span>Calculated</span>
-          <span class="legend-item"><span class="legend-mark comparison"></span>Cross-device</span>
+        <div>
+          <div class="legend" aria-label="Panel legend">
+            <span class="legend-item"><span class="legend-mark"></span>Direct device data</span>
+            <span class="legend-item"><span class="legend-mark calculated"></span>Calculated</span>
+            <span class="legend-item"><span class="legend-mark comparison"></span>Cross-device</span>
+          </div>
+          <div class="layout-actions" style="justify-content:flex-end;margin-top:7px">
+            <button id="resetPanelOrder" class="filter-button">Reset panel order</button>
+          </div>
         </div>
       </section>
 
@@ -2316,6 +2338,28 @@ let musePorts = [];
 let musePortScanStatus = "Not scanned yet.";
 let audioContext = null;
 let signalFilter = "all";
+let panelOrder = loadPanelOrder();
+let draggedSignalId = null;
+
+function loadPanelOrder() {
+  try {
+    const raw = localStorage.getItem("biofeedbackPlay.panelOrder.v1");
+    const parsed = raw ? JSON.parse(raw) : null;
+    return Array.isArray(parsed) ? parsed.filter(function(id) { return typeof id === "string"; }) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function savePanelOrder() {
+  try {
+    if (panelOrder) {
+      localStorage.setItem("biofeedbackPlay.panelOrder.v1", JSON.stringify(panelOrder));
+    } else {
+      localStorage.removeItem("biofeedbackPlay.panelOrder.v1");
+    }
+  } catch (_) {}
+}
 
 const DEVICE_COLORS = {
   lightstone: "#e6ad58",
@@ -2360,7 +2404,7 @@ function panelAccent(signal) {
   return "linear-gradient(90deg, " + stops.join(", ") + ")";
 }
 
-function sortedSignals(signals) {
+function defaultSortedSignals(signals) {
   return signals.slice().sort(function(a, b) {
     const aliveA = a.connected && a.running ? 0 : 1;
     const aliveB = b.connected && b.running ? 0 : 1;
@@ -2376,6 +2420,54 @@ function sortedSignals(signals) {
     if (kindA !== kindB) return kindA - kindB;
     return String(a.name || a.id).localeCompare(String(b.name || b.id));
   });
+}
+
+function normalizedPanelOrder(signals) {
+  const defaults = defaultSortedSignals(signals);
+  if (!panelOrder) return defaults;
+
+  const validIds = new Set(signals.map(function(signal) { return signal.id; }));
+  const seen = new Set();
+  const orderedIds = [];
+
+  panelOrder.forEach(function(id) {
+    if (validIds.has(id) && !seen.has(id)) {
+      seen.add(id);
+      orderedIds.push(id);
+    }
+  });
+
+  defaults.forEach(function(signal) {
+    if (!seen.has(signal.id)) {
+      seen.add(signal.id);
+      orderedIds.push(signal.id);
+    }
+  });
+
+  panelOrder = orderedIds;
+  savePanelOrder();
+  const byId = new Map(signals.map(function(signal) { return [signal.id, signal]; }));
+  return orderedIds.map(function(id) { return byId.get(id); }).filter(Boolean);
+}
+
+function sortedSignals(signals) {
+  return normalizedPanelOrder(signals);
+}
+
+function storeVisiblePanelOrder(visibleIds) {
+  const allSignals = normalizedPanelOrder(catalog.signals);
+  const allIds = allSignals.map(function(signal) { return signal.id; });
+  const visibleSet = new Set(visibleIds);
+  let visibleIndex = 0;
+
+  panelOrder = allIds.map(function(id) {
+    if (!visibleSet.has(id)) return id;
+    const replacement = visibleIds[visibleIndex];
+    visibleIndex += 1;
+    return replacement;
+  });
+
+  savePanelOrder();
 }
 
 function visibleSignals(signals) {
@@ -2433,6 +2525,16 @@ document.querySelectorAll("[data-signal-filter]").forEach(function(button) {
   };
 });
 
+document.getElementById("resetPanelOrder").onclick = function() {
+  panelOrder = null;
+  savePanelOrder();
+  signalSignature = "";
+  const displayed = visibleSignals(catalog.signals);
+  renderSignalPanels(displayed);
+  updateSignalPanels(displayed);
+  requestAnimationFrame(drawAllSignals);
+};
+
 function ensureSignalState(signal) {
   if (!signalState[signal.id]) {
     signalState[signal.id] = {
@@ -2466,7 +2568,8 @@ function renderSignalPanels(signals) {
     }).join("");
     const accent = panelAccent(signal);
     return (
-      '<article id="panel_' + id + '" class="signal-panel offline ' + kind +
+      '<article id="panel_' + id + '" data-signal-id="' + escapeHtml(signal.id) +
+        '" class="signal-panel offline ' + kind +
         '" style="--device-accent:' + escapeHtml(deviceColor(signal.device_id)) +
         ';--panel-accent:' + escapeHtml(accent) + '">' +
         '<div class="signal-panel-header">' +
@@ -2483,6 +2586,8 @@ function renderSignalPanels(signals) {
             '<span class="status-pill signal-status"><span id="dot_' + id + '" class="dot"></span>' +
               '<span id="status_' + id + '">Not connected</span></span>' +
             '<button id="audio_' + id + '" disabled>Audio on</button>' +
+            '<span class="drag-handle" draggable="true" role="button" tabindex="0" ' +
+              'aria-label="Drag to rearrange ' + escapeHtml(signal.name) + '" title="Drag to rearrange">⠿</span>' +
           '</div>' +
         '</div>' +
         '<div class="signal-body">' +
@@ -2514,6 +2619,92 @@ function renderSignalPanels(signals) {
     document.getElementById("audio_" + id).onclick = function() {
       toggleAudio(signal.id);
     };
+  });
+
+  installPanelDragAndDrop();
+}
+
+
+function clearDropIndicators() {
+  document.querySelectorAll(".signal-panel").forEach(function(panel) {
+    panel.classList.remove("drop-before", "drop-after");
+  });
+}
+
+function installPanelDragAndDrop() {
+  const grid = document.getElementById("signalGrid");
+  if (!grid) return;
+
+  grid.querySelectorAll(".drag-handle").forEach(function(handle) {
+    handle.addEventListener("dragstart", function(event) {
+      const panel = handle.closest(".signal-panel");
+      if (!panel) return;
+      draggedSignalId = panel.dataset.signalId;
+      panel.classList.add("dragging");
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", draggedSignalId || "");
+    });
+
+    handle.addEventListener("dragend", function() {
+      const panel = handle.closest(".signal-panel");
+      if (panel) panel.classList.remove("dragging");
+      draggedSignalId = null;
+      clearDropIndicators();
+    });
+  });
+
+  grid.querySelectorAll(".signal-panel").forEach(function(panel) {
+    panel.addEventListener("dragover", function(event) {
+      if (!draggedSignalId || panel.dataset.signalId === draggedSignalId) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      clearDropIndicators();
+
+      const rect = panel.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const nearSameRow = Math.abs(event.clientY - centerY) < rect.height * 0.28;
+      const before = nearSameRow
+        ? event.clientX < centerX
+        : event.clientY < centerY;
+      panel.classList.add(before ? "drop-before" : "drop-after");
+    });
+
+    panel.addEventListener("dragleave", function(event) {
+      if (event.relatedTarget && panel.contains(event.relatedTarget)) return;
+      panel.classList.remove("drop-before", "drop-after");
+    });
+
+    panel.addEventListener("drop", function(event) {
+      if (!draggedSignalId || panel.dataset.signalId === draggedSignalId) return;
+      event.preventDefault();
+
+      const targetId = panel.dataset.signalId;
+      const panels = Array.from(grid.querySelectorAll(".signal-panel"));
+      let ids = panels.map(function(item) { return item.dataset.signalId; });
+      ids = ids.filter(function(id) { return id !== draggedSignalId; });
+
+      const targetIndex = ids.indexOf(targetId);
+      if (targetIndex < 0) return;
+
+      const rect = panel.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const nearSameRow = Math.abs(event.clientY - centerY) < rect.height * 0.28;
+      const before = nearSameRow
+        ? event.clientX < centerX
+        : event.clientY < centerY;
+
+      ids.splice(targetIndex + (before ? 0 : 1), 0, draggedSignalId);
+      storeVisiblePanelOrder(ids);
+      draggedSignalId = null;
+      signalSignature = "";
+
+      const displayed = visibleSignals(catalog.signals);
+      renderSignalPanels(displayed);
+      updateSignalPanels(displayed);
+      requestAnimationFrame(drawAllSignals);
+    });
   });
 }
 
