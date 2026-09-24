@@ -1449,47 +1449,89 @@ class BiofeedbackState:
             self.muse_version = status.version
             self.muse_afe_gain = status.afe_gain
 
-    def _store_emwave_packet(self, parsed: dict) -> None:
+    def _store_emwave_packet(self, parsed: dict, unit_number: int = 1) -> None:
         packet_time = time.monotonic() - self.started_monotonic
         sample_period = 1.0 / EMWAVE_NOMINAL_SAMPLE_RATE
+        device_id = emwave_device_id(unit_number)
+        signal_id = f"{device_id}.pulse_raw"
+        osc_path = f"{emwave_osc_prefix(unit_number)}/pulse_raw"
 
         with self.lock:
-            self.emwave_packet_count += 1
-            self.emwave_gap_count += int(parsed.get("gap") or 0)
+            if unit_number == 1:
+                self.emwave_packet_count += 1
+                self.emwave_gap_count += int(parsed.get("gap") or 0)
+                values = parsed["samples"]
+                for index, value in enumerate(values):
+                    self.emwave_seq += 1
+                    sample = {
+                        "seq": self.emwave_seq,
+                        "t": packet_time - (len(values) - 1 - index) * sample_period,
+                        "pulse": int(value),
+                        "packet": int(parsed["counter"]),
+                    }
+                    self.emwave_samples.append(sample)
 
+                    if self.recording and self.recording_writer:
+                        self.recording_writer.writerow(
+                            [
+                                f"{time.time():.6f}",
+                                f"{sample['t']:.6f}",
+                                device_id,
+                                signal_id,
+                                int(value),
+                            ]
+                        )
+
+                    if self.osc_enabled:
+                        try:
+                            self.osc_socket.sendto(
+                                osc_message(osc_path, int(value)),
+                                (self.osc_host, self.osc_port),
+                            )
+                        except OSError as exc:
+                            self.emwave_last_error = "OSC: " + str(exc)
+
+                if self.recording and self.recording_file and self.emwave_packet_count % 10 == 0:
+                    self.recording_file.flush()
+                return
+
+            runtime = self.emwave_extra_units.get(unit_number)
+            if runtime is None:
+                return
+            runtime["packet_count"] += 1
+            runtime["gap_count"] += int(parsed.get("gap") or 0)
             values = parsed["samples"]
             for index, value in enumerate(values):
-                self.emwave_seq += 1
+                runtime["seq"] += 1
                 sample = {
-                    "seq": self.emwave_seq,
+                    "seq": runtime["seq"],
                     "t": packet_time - (len(values) - 1 - index) * sample_period,
                     "pulse": int(value),
                     "packet": int(parsed["counter"]),
                 }
-                self.emwave_samples.append(sample)
+                runtime["samples"].append(sample)
 
                 if self.recording and self.recording_writer:
                     self.recording_writer.writerow(
                         [
                             f"{time.time():.6f}",
                             f"{sample['t']:.6f}",
-                            "emwave",
-                            "emwave.pulse_raw",
+                            device_id,
+                            signal_id,
                             int(value),
                         ]
                     )
 
                 if self.osc_enabled:
-                    target = (self.osc_host, self.osc_port)
                     try:
                         self.osc_socket.sendto(
-                            osc_message("/biofeedback/emwave/pulse_raw", int(value)),
-                            target,
+                            osc_message(osc_path, int(value)),
+                            (self.osc_host, self.osc_port),
                         )
                     except OSError as exc:
-                        self.emwave_last_error = "OSC: " + str(exc)
+                        runtime["error"] = "OSC: " + str(exc)
 
-            if self.recording and self.recording_file and self.emwave_packet_count % 10 == 0:
+            if self.recording and self.recording_file and runtime["packet_count"] % 10 == 0:
                 self.recording_file.flush()
 
     def _store_sample(self, skin: int, pulse: int) -> None:
