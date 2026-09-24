@@ -34,7 +34,7 @@ VENDOR_ID = 0x14FA
 PRODUCT_ID = 0x0001
 EMWAVE_VENDOR_ID = 0x0E30
 EMWAVE_PRODUCT_ID = 0x0002
-EMWAVE_NOMINAL_SAMPLE_RATE = 375.0
+EMWAVE_NOMINAL_SAMPLE_RATE = 370.0
 HOST = "127.0.0.1"
 PORT = 8765
 
@@ -493,6 +493,17 @@ def _add_pair_signal_definitions(
         "Experimental recent waveform similarity after interpolation. Different sensor shapes, clipping, placement, and timing offsets can reduce it.",
         f"{osc_base}/correlation",
         "waveform_correlation",
+        precision=3,
+        **common,
+    )
+    SIGNAL_DEFINITIONS[f"comparison.{pair_key}.amplitude_ratio"] = _derived_signal(
+        second_id,
+        "Relative pulse amplitude",
+        f"{first_name} / {second_name} pulse amplitude ratio",
+        "ratio",
+        "Ratio of recent raw pulse-wave amplitudes. This is useful for comparing contact quality and placement, but the sensors are uncalibrated so it should not be interpreted as a blood-flow ratio.",
+        f"{osc_base}/amplitude_ratio",
+        "amplitude_ratio",
         precision=3,
         **common,
     )
@@ -1354,6 +1365,7 @@ class BiofeedbackState:
                     "heart_rate_difference_bpm": "hr_difference",
                     "beat_offset_ms": "beat_offset",
                     "waveform_correlation": "correlation",
+                    "amplitude_ratio": "amplitude_ratio",
                 }.items():
                     self._store_derived(
                         f"comparison.{pair_key}.{suffix}",
