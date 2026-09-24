@@ -1265,32 +1265,20 @@ class BiofeedbackState:
                     pass
 
     def _analysis_loop(self) -> None:
-        pulse_maps = {
-            "lightstone": {
-                "heart_rate_bpm": "lightstone.heart_rate",
-                "ibi_ms": "lightstone.ibi",
-                "rmssd_ms": "lightstone.hrv_rmssd",
-                "sdnn_ms": "lightstone.hrv_sdnn",
-                "pnn50_percent": "lightstone.pnn50",
-                "coherence_ratio": "lightstone.coherence_ratio",
-                "coherence_peak_percent": "lightstone.coherence_peak",
-                "respiration_bpm": "lightstone.respiration_estimate",
-                "pulse_amplitude": "lightstone.pulse_amplitude",
-                "beat_confidence_percent": "lightstone.beat_confidence",
-            },
-            "emwave": {
-                "heart_rate_bpm": "emwave.heart_rate",
-                "ibi_ms": "emwave.ibi",
-                "rmssd_ms": "emwave.hrv_rmssd",
-                "sdnn_ms": "emwave.hrv_sdnn",
-                "pnn50_percent": "emwave.pnn50",
-                "coherence_ratio": "emwave.coherence_ratio",
-                "coherence_peak_percent": "emwave.coherence_peak",
-                "respiration_bpm": "emwave.respiration_estimate",
-                "pulse_amplitude": "emwave.pulse_amplitude",
-                "beat_confidence_percent": "emwave.beat_confidence",
-            },
-        }
+        def pulse_signal_map(device_id: str) -> dict[str, str]:
+            return {
+                "heart_rate_bpm": f"{device_id}.heart_rate",
+                "ibi_ms": f"{device_id}.ibi",
+                "rmssd_ms": f"{device_id}.hrv_rmssd",
+                "sdnn_ms": f"{device_id}.hrv_sdnn",
+                "pnn50_percent": f"{device_id}.pnn50",
+                "coherence_ratio": f"{device_id}.coherence_ratio",
+                "coherence_peak_percent": f"{device_id}.coherence_peak",
+                "respiration_bpm": f"{device_id}.respiration_estimate",
+                "pulse_amplitude": f"{device_id}.pulse_amplitude",
+                "beat_confidence_percent": f"{device_id}.beat_confidence",
+            }
+
         skin_map = {
             "tonic_level": "lightstone.skin_tonic",
             "phasic_level": "lightstone.skin_phasic",
@@ -1312,43 +1300,89 @@ class BiofeedbackState:
             started = time.monotonic()
             with self.lock:
                 light_connected = self.connected and self.running
-                emwave_connected = self.emwave_connected and self.emwave_running
+                primary_emwave_connected = self.emwave_connected and self.emwave_running
                 muse_connected = self.muse_connected and self.muse_running
                 light = list(self.samples)
-                emwave = list(self.emwave_samples)
+                primary_emwave = list(self.emwave_samples)
                 muse_eeg = list(self.muse_eeg_samples)
                 muse_accel = list(self.muse_accel_samples)
+                extra_snapshots = {
+                    unit_number: {
+                        "connected": runtime["connected"] and runtime["running"],
+                        "samples": list(runtime["samples"]),
+                    }
+                    for unit_number, runtime in self.emwave_extra_units.items()
+                    if runtime["seen"] or runtime["connected"]
+                }
 
             elapsed = time.monotonic() - self.started_monotonic
+            pulse_points: dict[str, list[tuple[float, float]]] = {}
 
             if light_connected:
                 light_pulse_points = [(s["t"], s["pulse"]) for s in light]
+                pulse_points["lightstone"] = light_pulse_points
                 metrics = pulse_metrics(light_pulse_points)
-                for key, signal_id in pulse_maps["lightstone"].items():
+                for key, signal_id in pulse_signal_map("lightstone").items():
                     self._store_derived(signal_id, metrics.get(key), elapsed)
 
                 skin = skin_metrics([(s["t"], s["skin"]) for s in light])
                 for key, signal_id in skin_map.items():
                     self._store_derived(signal_id, skin.get(key), elapsed)
-            else:
-                light_pulse_points = []
 
-            if emwave_connected:
-                emwave_points = [(s["t"], s["pulse"]) for s in emwave]
-                metrics = pulse_metrics(emwave_points)
-                for key, signal_id in pulse_maps["emwave"].items():
+            if primary_emwave_connected:
+                primary_points = [(s["t"], s["pulse"]) for s in primary_emwave]
+                pulse_points["emwave"] = primary_points
+                metrics = pulse_metrics(primary_points)
+                for key, signal_id in pulse_signal_map("emwave").items():
                     self._store_derived(signal_id, metrics.get(key), elapsed)
-            else:
-                emwave_points = []
 
-            if light_connected and emwave_connected:
-                comparison = pair_metrics(light_pulse_points, emwave_points)
-                for key, signal_id in {
-                    "heart_rate_difference_bpm": "comparison.lightstone_emwave.hr_difference",
-                    "beat_offset_ms": "comparison.lightstone_emwave.beat_offset",
-                    "waveform_correlation": "comparison.lightstone_emwave.correlation",
+            for unit_number, snapshot in extra_snapshots.items():
+                if not snapshot["connected"]:
+                    continue
+                device_id = emwave_device_id(unit_number)
+                points = [(s["t"], s["pulse"]) for s in snapshot["samples"]]
+                pulse_points[device_id] = points
+                metrics = pulse_metrics(points)
+                for key, signal_id in pulse_signal_map(device_id).items():
+                    self._store_derived(signal_id, metrics.get(key), elapsed)
+
+            def publish_pair(first_id: str, second_id: str, pair_key: str) -> None:
+                if first_id not in pulse_points or second_id not in pulse_points:
+                    return
+                comparison = pair_metrics(pulse_points[first_id], pulse_points[second_id])
+                for key, suffix in {
+                    "heart_rate_difference_bpm": "hr_difference",
+                    "beat_offset_ms": "beat_offset",
+                    "waveform_correlation": "correlation",
                 }.items():
-                    self._store_derived(signal_id, comparison.get(key), elapsed)
+                    self._store_derived(
+                        f"comparison.{pair_key}.{suffix}",
+                        comparison.get(key),
+                        elapsed,
+                    )
+
+            publish_pair("lightstone", "emwave", "lightstone_emwave")
+            for unit_number in range(2, 5):
+                publish_pair(
+                    "lightstone",
+                    emwave_device_id(unit_number),
+                    f"lightstone_emwave{unit_number}",
+                )
+
+            connected_emwaves = [
+                device_id
+                for device_id in [emwave_device_id(i) for i in range(1, 5)]
+                if device_id in pulse_points
+            ]
+            for first_pos, first_id in enumerate(connected_emwaves):
+                for second_id in connected_emwaves[first_pos + 1 :]:
+                    first_index = 1 if first_id == "emwave" else int(first_id[6:])
+                    second_index = 1 if second_id == "emwave" else int(second_id[6:])
+                    publish_pair(
+                        first_id,
+                        second_id,
+                        f"emwave{first_index}_emwave{second_index}",
+                    )
 
             if muse_connected:
                 eeg = eeg_metrics(muse_eeg, MUSE_EEG_RATE)
