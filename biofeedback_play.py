@@ -26,6 +26,7 @@ from devices.muse2014 import (
     Muse2014SerialClient,
     list_muse_serial_ports,
 )
+from physiology import eeg_metrics, motion_metrics, pair_metrics, pulse_metrics, skin_metrics
 
 
 VENDOR_ID = 0x14FA
@@ -210,6 +211,193 @@ SIGNAL_DEFINITIONS = {
         "value_key": "z",
     },
 }
+
+def _derived_signal(
+    device_id: str,
+    name: str,
+    data_label: str,
+    unit: str,
+    description: str,
+    osc: str,
+    value_key: str,
+    *,
+    audio: str = "Pitch follows the derived value.",
+    precision: int = 1,
+    requires_devices: list[str] | None = None,
+    source_name: str | None = None,
+) -> dict:
+    return {
+        "device_id": device_id,
+        "name": name,
+        "short_name": name,
+        "data_label": data_label,
+        "unit": unit,
+        "description": description,
+        "audio": audio,
+        "osc": osc,
+        "nominal_rate": 1.0,
+        "value_key": value_key,
+        "derived": True,
+        "precision": precision,
+        "requires_devices": requires_devices or [device_id],
+        "source_name": source_name,
+    }
+
+
+def _pulse_derived_definitions(device_id: str, label: str, osc_prefix: str) -> dict[str, dict]:
+    return {
+        f"{device_id}.heart_rate": _derived_signal(
+            device_id, "Heart rate", "Beat-derived heart rate", "beats/min",
+            f"Median recent beat rate derived from the {label} pulse waveform. This is computed from detected pulse peaks.",
+            f"{osc_prefix}/heart_rate", "heart_rate_bpm", precision=1,
+            audio="Pitch follows heart rate; higher beats per minute produce a higher tone.",
+        ),
+        f"{device_id}.ibi": _derived_signal(
+            device_id, "Inter-beat interval", "Time between the latest detected beats", "ms",
+            f"Time between successive detected beats from the {label} pulse waveform. This is the raw material for HRV.",
+            f"{osc_prefix}/ibi_ms", "ibi_ms", precision=0,
+        ),
+        f"{device_id}.hrv_rmssd": _derived_signal(
+            device_id, "HRV RMSSD", "Short-term heart-rate variability", "ms",
+            "Root mean square of successive inter-beat-interval differences. It summarizes beat-to-beat variability; short windows are exploratory rather than a standardized clinical assessment.",
+            f"{osc_prefix}/hrv_rmssd_ms", "rmssd_ms", precision=1,
+        ),
+        f"{device_id}.hrv_sdnn": _derived_signal(
+            device_id, "HRV SDNN", "Inter-beat-interval standard deviation", "ms",
+            "Standard deviation of recent detected inter-beat intervals. Values depend strongly on recording duration and conditions.",
+            f"{osc_prefix}/hrv_sdnn_ms", "sdnn_ms", precision=1,
+        ),
+        f"{device_id}.pnn50": _derived_signal(
+            device_id, "pNN50", "Large successive IBI changes", "%",
+            "Percentage of successive detected inter-beat intervals differing by more than 50 ms in the current rolling window.",
+            f"{osc_prefix}/pnn50_percent", "pnn50_percent", precision=1,
+        ),
+        f"{device_id}.coherence_ratio": _derived_signal(
+            device_id, "Coherence ratio", "Open HRV spectral coherence measure", "ratio",
+            "Open implementation inspired by published coherence definitions: power in a narrow peak within 0.04–0.26 Hz divided by remaining HRV spectral power. It is not HeartMath's proprietary emWave score.",
+            f"{osc_prefix}/coherence_ratio", "coherence_ratio", precision=2,
+        ),
+        f"{device_id}.coherence_peak": _derived_signal(
+            device_id, "Coherence peak share", "HRV power concentrated near dominant coherence peak", "%",
+            "Percentage of analyzed HRV spectral power concentrated within ±0.015 Hz of the dominant peak in the 0.04–0.26 Hz coherence range.",
+            f"{osc_prefix}/coherence_peak_percent", "coherence_peak_percent", precision=1,
+        ),
+        f"{device_id}.respiration_estimate": _derived_signal(
+            device_id, "Breathing estimate", "Respiration inferred from HRV", "breaths/min",
+            "Experimental respiration-rate estimate from the dominant respiratory modulation of beat intervals. It is indirect and only appears when enough data and a sufficiently concentrated rhythm are present.",
+            f"{osc_prefix}/respiration_bpm", "respiration_bpm", precision=1,
+        ),
+        f"{device_id}.pulse_amplitude": _derived_signal(
+            device_id, "Pulse amplitude", "Recent pulse-waveform range", "raw device units",
+            f"Robust 5-second pulse-wave amplitude from the {label} waveform, using the 5th-to-95th percentile range.",
+            f"{osc_prefix}/pulse_amplitude", "pulse_amplitude", precision=1,
+        ),
+        f"{device_id}.beat_confidence": _derived_signal(
+            device_id, "Beat confidence", "Beat detector confidence", "%",
+            "Heuristic confidence in automated beat detection, based on plausible intervals, regularity, and waveform amplitude. This is a software quality indicator, not physiology.",
+            f"{osc_prefix}/beat_confidence_percent", "beat_confidence_percent", precision=0,
+        ),
+    }
+
+
+SIGNAL_DEFINITIONS.update(_pulse_derived_definitions(
+    "lightstone", "Lightstone gold-dot finger sensor", "/biofeedback/lightstone"
+))
+SIGNAL_DEFINITIONS.update(_pulse_derived_definitions(
+    "emwave", "emWave ear clip", "/biofeedback/emwave"
+))
+
+SIGNAL_DEFINITIONS.update({
+    "lightstone.skin_tonic": _derived_signal(
+        "lightstone", "Skin tonic level", "Slow skin-conductance baseline", "raw device units",
+        "Ten-second moving mean of the Lightstone skin-conductance channel. It approximates the slow tonic component but cannot be expressed in microsiemens without calibration.",
+        "/biofeedback/lightstone/skin_tonic", "tonic_level", precision=1,
+    ),
+    "lightstone.skin_phasic": _derived_signal(
+        "lightstone", "Skin phasic activity", "Fast skin-conductance component", "raw device units",
+        "Current skin-conductance value minus the recent tonic baseline. It highlights faster changes without claiming a calibrated SCR amplitude.",
+        "/biofeedback/lightstone/skin_phasic", "phasic_level", precision=1,
+    ),
+    "lightstone.skin_slope": _derived_signal(
+        "lightstone", "Skin trend", "Ten-second skin-conductance slope", "raw units/min",
+        "Linear trend of the recent skin-conductance signal. Positive values indicate rising conductance; negative values indicate falling conductance.",
+        "/biofeedback/lightstone/skin_slope", "slope_per_min", precision=1,
+    ),
+    "lightstone.skin_responses": _derived_signal(
+        "lightstone", "Skin responses", "Relative phasic response rate", "responses/min",
+        "Experimental count of rapid relative skin-conductance peaks per minute. Because Lightstone units are uncalibrated, the threshold adapts to the recent signal rather than using a clinical microsiemens threshold.",
+        "/biofeedback/lightstone/skin_response_rate", "response_rate_per_min", precision=1,
+    ),
+    "lightstone.skin_variability": _derived_signal(
+        "lightstone", "Skin variability", "Recent skin-conductance spread", "raw device units",
+        "Thirty-second standard deviation of the raw skin-conductance channel.",
+        "/biofeedback/lightstone/skin_variability", "variability", precision=2,
+    ),
+    "muse.band.delta": _derived_signal(
+        "muse", "EEG delta power", "1–4 Hz EEG band power", "µV², experimental",
+        "Average spectral power across the four Muse EEG channels in the delta band. Scaling remains experimental.",
+        "/biofeedback/muse/band/delta", "delta_power", precision=2,
+    ),
+    "muse.band.theta": _derived_signal(
+        "muse", "EEG theta power", "4–8 Hz EEG band power", "µV², experimental",
+        "Average spectral power across the four Muse EEG channels in the theta band.",
+        "/biofeedback/muse/band/theta", "theta_power", precision=2,
+    ),
+    "muse.band.alpha": _derived_signal(
+        "muse", "EEG alpha power", "8–13 Hz EEG band power", "µV², experimental",
+        "Average spectral power across the four Muse EEG channels in the alpha band.",
+        "/biofeedback/muse/band/alpha", "alpha_power", precision=2,
+    ),
+    "muse.band.beta": _derived_signal(
+        "muse", "EEG beta power", "13–30 Hz EEG band power", "µV², experimental",
+        "Average spectral power across the four Muse EEG channels in the beta band.",
+        "/biofeedback/muse/band/beta", "beta_power", precision=2,
+    ),
+    "muse.band.gamma": _derived_signal(
+        "muse", "EEG gamma power", "30–45 Hz EEG band power", "µV², experimental",
+        "Average spectral power across the four Muse EEG channels in the gamma band. Muscle activity can strongly contaminate this range.",
+        "/biofeedback/muse/band/gamma", "gamma_power", precision=2,
+    ),
+    "muse.alpha_asymmetry": _derived_signal(
+        "muse", "Frontal alpha asymmetry", "FP2 minus FP1 log alpha power", "log-power difference",
+        "Experimental right-minus-left frontal alpha log-power index. It is shown as a signal feature, not as a mood or personality diagnosis.",
+        "/biofeedback/muse/alpha_asymmetry", "alpha_asymmetry", precision=3,
+    ),
+    "muse.eeg_rms": _derived_signal(
+        "muse", "EEG broadband RMS", "Broadband EEG variation", "µV, experimental",
+        "Root-mean-square variation across the four recent EEG channels after mean removal. Large muscle or motion artifacts can dominate it.",
+        "/biofeedback/muse/eeg_rms", "broadband_rms", precision=2,
+    ),
+    "muse.motion_intensity": _derived_signal(
+        "muse", "Head motion intensity", "Accelerometer variation", "raw counts RMS",
+        "Combined recent variation across the Muse accelerometer axes. It suppresses constant gravity and emphasizes movement.",
+        "/biofeedback/muse/motion_intensity", "motion_intensity", precision=1,
+    ),
+    "comparison.lightstone_emwave.hr_difference": _derived_signal(
+        "emwave", "Pulse-source HR difference", "Lightstone vs emWave heart-rate difference", "beats/min",
+        "Absolute difference between independently detected heart rates from Lightstone and emWave. Useful for validating the two pulse pipelines.",
+        "/biofeedback/comparison/lightstone_emwave/hr_difference",
+        "heart_rate_difference_bpm", precision=2,
+        requires_devices=["lightstone", "emwave"],
+        source_name="Lightstone + emWave",
+    ),
+    "comparison.lightstone_emwave.beat_offset": _derived_signal(
+        "emwave", "Pulse-source beat offset", "Median Lightstone vs emWave beat timing offset", "ms",
+        "Median nearest-beat timing difference between the two pulse sensors. Sensor placement and USB buffering contribute to this value, so it is not a medical pulse-transit-time measurement.",
+        "/biofeedback/comparison/lightstone_emwave/beat_offset_ms",
+        "beat_offset_ms", precision=1,
+        requires_devices=["lightstone", "emwave"],
+        source_name="Lightstone + emWave",
+    ),
+    "comparison.lightstone_emwave.correlation": _derived_signal(
+        "emwave", "Pulse-source correlation", "Recent waveform correlation", "correlation −1…1",
+        "Experimental correlation between recent Lightstone and emWave pulse waveforms after time interpolation. Different sensor shapes and delays can lower it.",
+        "/biofeedback/comparison/lightstone_emwave/correlation",
+        "waveform_correlation", precision=3,
+        requires_devices=["lightstone", "emwave"],
+        source_name="Lightstone + emWave",
+    ),
+})
 
 
 class EmWaveParser:
