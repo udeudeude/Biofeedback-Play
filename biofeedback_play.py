@@ -2036,15 +2036,54 @@ input.port { width: 90px; }
 }
 .signal-grid {
   display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px;
-  grid-column: span 12;
+  grid-column: span 12; align-items: start;
 }
-.signal-panel { grid-column: span 6; overflow: hidden; }
+.signal-panel {
+  grid-column: span 6; overflow: hidden; position: relative; align-self: start;
+  --device-accent: #8b7cf6;
+  --panel-accent: var(--device-accent);
+}
+.signal-panel::before {
+  content: ""; display: block; height: 3px; background: var(--panel-accent);
+}
+.signal-panel.calculated {
+  background:
+    linear-gradient(145deg, rgba(139,124,246,.035), transparent 34%),
+    rgba(21,24,33,.9);
+}
+.signal-panel.comparison {
+  background:
+    linear-gradient(145deg, rgba(255,255,255,.045), transparent 34%),
+    rgba(21,24,33,.9);
+}
 .signal-panel-header {
   display: flex; justify-content: space-between; gap: 12px;
   align-items: flex-start; padding: 15px 16px;
 }
-.signal-title { margin-top: 4px; font-size: 19px; font-weight: 680; }
-.signal-device { margin-top: 4px; color: var(--muted); font-size: 12px; }
+.signal-title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.signal-title { font-size: 19px; font-weight: 680; }
+.signal-device { margin-top: 7px; color: var(--muted); font-size: 12px; }
+.kind-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--line); border-radius: 999px;
+  padding: 3px 7px; font-size: 10px; line-height: 1;
+  letter-spacing: .05em; text-transform: uppercase; color: var(--muted);
+  background: rgba(255,255,255,.025);
+}
+.kind-badge.direct { border-color: rgba(89,209,133,.38); color: #9ee6ba; }
+.kind-badge.calculated { border-color: rgba(196,181,253,.38); color: #d6ccff; }
+.kind-badge.comparison { border-color: rgba(255,210,120,.38); color: #f3d596; }
+.source-chips { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
+.source-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--line); border-radius: 999px;
+  padding: 3px 8px 3px 6px; font-size: 11px; color: #cfd5e2;
+  background: rgba(255,255,255,.025);
+}
+.source-swatch {
+  width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--source-color, var(--accent));
+}
 .signal-body { padding: 0 16px 16px; }
 .signal-panel.offline .signal-body { display: none; }
 .signal-panel.offline { opacity: .72; }
@@ -2082,8 +2121,13 @@ canvas {
   margin-top: 12px;
 }
 .device-card {
-  grid-column: span 6; padding: 14px;
+  grid-column: span 6; padding: 0 14px 14px; overflow: hidden; position: relative;
   border: 1px solid var(--line); border-radius: 12px; background: #10131b;
+  --device-accent: #8b7cf6;
+}
+.device-card::before {
+  content: ""; display: block; height: 3px; margin: 0 -14px 12px;
+  background: var(--device-accent);
 }
 .device-name { font-size: 17px; font-weight: 650; }
 .device-meta { margin-top: 8px; display: grid; gap: 4px; }
@@ -2091,6 +2135,24 @@ canvas {
 .badge {
   display: inline-block; border: 1px solid var(--line); border-radius: 999px;
   padding: 4px 8px; margin: 3px 4px 0 0; color: var(--muted); font-size: 11px;
+}
+.signal-toolbar {
+  grid-column: span 12; display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: rgba(21,24,33,.68);
+}
+.filter-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+.filter-button { padding: 6px 10px; font-size: 12px; color: var(--muted); }
+.filter-button.active { color: var(--text); background: #2b3040; border-color: #606980; }
+.legend { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.legend-item { color: var(--muted); font-size: 11px; display: inline-flex; align-items: center; gap: 5px; }
+.legend-mark { width: 12px; height: 3px; border-radius: 3px; background: var(--accent2); }
+.legend-mark.calculated {
+  height: 7px; border: 1px solid rgba(196,181,253,.55); background: rgba(196,181,253,.12);
+}
+.legend-mark.comparison {
+  height: 7px; border: 1px solid rgba(255,210,120,.55); background: rgba(255,210,120,.12);
 }
 .device-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
 .device-table th {
@@ -2148,6 +2210,20 @@ canvas {
         <div class="row">
           <button id="recordBtn">Start recording</button>
           <button id="folderBtn">Show recordings</button>
+        </div>
+      </section>
+
+      <section class="signal-toolbar">
+        <div class="filter-buttons" aria-label="Signal panel filter">
+          <button class="filter-button active" data-signal-filter="all">All</button>
+          <button class="filter-button" data-signal-filter="direct">Direct</button>
+          <button class="filter-button" data-signal-filter="calculated">Calculated</button>
+          <button class="filter-button" data-signal-filter="comparison">Comparisons</button>
+        </div>
+        <div class="legend" aria-label="Panel legend">
+          <span class="legend-item"><span class="legend-mark"></span>Direct device data</span>
+          <span class="legend-item"><span class="legend-mark calculated"></span>Calculated</span>
+          <span class="legend-item"><span class="legend-mark comparison"></span>Cross-device</span>
         </div>
       </section>
 
@@ -2239,6 +2315,74 @@ let diagnosticDevices = [];
 let musePorts = [];
 let musePortScanStatus = "Not scanned yet.";
 let audioContext = null;
+let signalFilter = "all";
+
+const DEVICE_COLORS = {
+  lightstone: "#e6ad58",
+  emwave: "#56c7b7",
+  emwave2: "#55a7d8",
+  emwave3: "#b28be0",
+  emwave4: "#df8292",
+  muse: "#7f9cf5"
+};
+
+function deviceColor(deviceId) {
+  return DEVICE_COLORS[deviceId] || "#8b7cf6";
+}
+
+function signalSourceIds(signal) {
+  const ids = signal.requires_devices && signal.requires_devices.length
+    ? signal.requires_devices
+    : [signal.device_id];
+  return ids.filter(Boolean);
+}
+
+function signalKind(signal) {
+  if (signalSourceIds(signal).length > 1) return "comparison";
+  return signal.derived ? "calculated" : "direct";
+}
+
+function signalKindLabel(signal) {
+  const kind = signalKind(signal);
+  if (kind === "comparison") return "Cross-device";
+  if (kind === "calculated") return "Calculated";
+  return "Direct";
+}
+
+function panelAccent(signal) {
+  const colors = signalSourceIds(signal).map(deviceColor);
+  if (colors.length <= 1) return colors[0] || "#8b7cf6";
+  const stops = colors.map(function(color, index) {
+    const start = Math.round(index * 100 / colors.length);
+    const end = Math.round((index + 1) * 100 / colors.length);
+    return color + " " + start + "%, " + color + " " + end + "%";
+  });
+  return "linear-gradient(90deg, " + stops.join(", ") + ")";
+}
+
+function sortedSignals(signals) {
+  return signals.slice().sort(function(a, b) {
+    const aliveA = a.connected && a.running ? 0 : 1;
+    const aliveB = b.connected && b.running ? 0 : 1;
+    if (aliveA !== aliveB) return aliveA - aliveB;
+
+    const sourceA = signalSourceIds(a)[0] || "";
+    const sourceB = signalSourceIds(b)[0] || "";
+    if (sourceA !== sourceB) return sourceA.localeCompare(sourceB);
+
+    const order = {direct: 0, calculated: 1, comparison: 2};
+    const kindA = order[signalKind(a)];
+    const kindB = order[signalKind(b)];
+    if (kindA !== kindB) return kindA - kindB;
+    return String(a.name || a.id).localeCompare(String(b.name || b.id));
+  });
+}
+
+function visibleSignals(signals) {
+  const ordered = sortedSignals(signals);
+  if (signalFilter === "all") return ordered;
+  return ordered.filter(function(signal) { return signalKind(signal) === signalFilter; });
+}
 
 function post(action, extra) {
   const body = Object.assign({action: action}, extra || {});
@@ -2277,6 +2421,18 @@ document.querySelectorAll(".tab-button").forEach(function(button) {
   button.onclick = function() { switchTab(button.dataset.tab); };
 });
 
+document.querySelectorAll("[data-signal-filter]").forEach(function(button) {
+  button.onclick = function() {
+    signalFilter = button.dataset.signalFilter;
+    document.querySelectorAll("[data-signal-filter]").forEach(function(candidate) {
+      candidate.classList.toggle("active", candidate === button);
+    });
+    renderSignalPanels(visibleSignals(catalog.signals));
+    updateSignalPanels(visibleSignals(catalog.signals));
+    requestAnimationFrame(drawAllSignals);
+  };
+});
+
 function ensureSignalState(signal) {
   if (!signalState[signal.id]) {
     signalState[signal.id] = {
@@ -2300,15 +2456,28 @@ function renderSignalPanels(signals) {
   grid.innerHTML = signals.map(function(signal) {
     ensureSignalState(signal);
     const id = domId(signal.id);
+    const kind = signalKind(signal);
+    const sourceIds = signalSourceIds(signal);
+    const sourceNames = signal.data_sources || [signal.device_name];
+    const sourceChips = sourceNames.map(function(name, index) {
+      const sourceId = sourceIds[index] || signal.device_id;
+      return '<span class="source-chip"><span class="source-swatch" style="--source-color:' +
+        escapeHtml(deviceColor(sourceId)) + '"></span>' + escapeHtml(name) + '</span>';
+    }).join("");
+    const accent = panelAccent(signal);
     return (
-      '<article id="panel_' + id + '" class="signal-panel offline">' +
+      '<article id="panel_' + id + '" class="signal-panel offline ' + kind +
+        '" style="--device-accent:' + escapeHtml(deviceColor(signal.device_id)) +
+        ';--panel-accent:' + escapeHtml(accent) + '">' +
         '<div class="signal-panel-header">' +
           '<div>' +
             '<div class="label">' + escapeHtml(signal.data_label) + '</div>' +
-            '<div class="signal-title">' + escapeHtml(signal.name) + '</div>' +
-            '<div class="signal-device">Data from: ' +
-              escapeHtml((signal.data_sources || [signal.device_name]).join(" + ")) +
+            '<div class="signal-title-row">' +
+              '<div class="signal-title">' + escapeHtml(signal.name) + '</div>' +
+              '<span class="kind-badge ' + kind + '">' + escapeHtml(signalKindLabel(signal)) + '</span>' +
             '</div>' +
+            '<div class="signal-device">Data from</div>' +
+            '<div class="source-chips">' + sourceChips + '</div>' +
           '</div>' +
           '<div class="row">' +
             '<span class="status-pill signal-status"><span id="dot_' + id + '" class="dot"></span>' +
@@ -2461,7 +2630,7 @@ function renderDeviceSetup(devices) {
     }
 
     return (
-      '<div class="device-card">' +
+      '<div class="device-card" style="--device-accent:' + escapeHtml(deviceColor(device.id)) + '">' +
         '<div class="row between">' +
           '<div>' +
             '<div class="device-name">' + escapeHtml(device.name) + '</div>' +
@@ -2578,12 +2747,15 @@ function updateGlobalStatus() {
 
 function applyCatalog(data) {
   catalog = data;
-  const signature = catalog.signals.map(function(s) { return s.id; }).join("|");
+  const displayed = visibleSignals(catalog.signals);
+  const signature = displayed.map(function(s) {
+    return s.id + ":" + Boolean(s.connected && s.running);
+  }).join("|") + "|filter:" + signalFilter;
   if (signature !== signalSignature) {
     signalSignature = signature;
-    renderSignalPanels(catalog.signals);
+    renderSignalPanels(displayed);
   }
-  updateSignalPanels(catalog.signals);
+  updateSignalPanels(displayed);
   if (!document.activeElement || document.activeElement.id !== "musePortSelect") {
     renderDeviceSetup(catalog.devices);
   }
@@ -2647,9 +2819,16 @@ function drawSignal(signal) {
   const padding = (max - min) * .08;
   min -= padding; max += padding;
 
-  ctx.strokeStyle = "#c4b5fd";
+  ctx.strokeStyle = deviceColor(signal.device_id);
   ctx.lineWidth = 1.55 * size.ratio;
   ctx.lineJoin = "round";
+  if (signalKind(signal) === "calculated") {
+    ctx.setLineDash([5 * size.ratio, 3 * size.ratio]);
+  } else if (signalKind(signal) === "comparison") {
+    ctx.setLineDash([9 * size.ratio, 4 * size.ratio]);
+  } else {
+    ctx.setLineDash([]);
+  }
   ctx.beginPath();
   state.values.forEach(function(value, index) {
     const x = index * size.w / Math.max(1, state.values.length - 1);
@@ -2657,10 +2836,11 @@ function drawSignal(signal) {
     if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   });
   ctx.stroke();
+  ctx.setLineDash([]);
 }
 
 function drawAllSignals() {
-  catalog.signals.forEach(drawSignal);
+  visibleSignals(catalog.signals).forEach(drawSignal);
 }
 
 function formatSignalValue(signal, value) {
