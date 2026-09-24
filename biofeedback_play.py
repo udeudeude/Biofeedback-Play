@@ -65,7 +65,7 @@ DEVICE_DEFINITIONS = {
         "summary": "Finger-sensor interface providing skin-conductance and pulse-waveform channels.",
     },
     "emwave": {
-        "name": "HeartMath emWave Pulse Sensor",
+        "name": "HeartMath emWave 1",
         "manufacturer": "HeartMath / Quantum Intech",
         "transport": "USB HID",
         "usb_id": "0e30:0002",
@@ -2355,6 +2355,16 @@ function renderDeviceSetup(devices) {
       (derivedCount ? '<span class="badge">+' + derivedCount + ' derived panels</span>' : "");
 
     let deviceSpecific = "";
+    if (device.id === "emwave" || /^emwave[2-4]$/.test(device.id)) {
+      deviceSpecific =
+        '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">' +
+          '<div class="label">Multi-emWave experiments</div>' +
+          '<div class="small" style="margin-top:6px">' +
+            'When two or more emWave modules are connected, Biofeedback Play opens them simultaneously and adds pair-comparison panels for heart-rate agreement, beat timing offset, waveform correlation, and relative pulse amplitude. ' +
+            'Useful placements include one sensor on each earlobe, or an ear sensor plus a compatible finger sensor. Timing offsets include USB and sensor delays, so they are experimental and are not presented as medical pulse-transit time.' +
+          '</div>' +
+        '</div>';
+    }
     if (device.id === "muse") {
       const currentPort = device.port || "";
       let options = '<option value="">Select Muse serial port</option>';
