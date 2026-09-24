@@ -13,7 +13,7 @@ Observed on the user's hardware on 2026-09-23:
 
 The device is visible through hidapi on macOS.
 
-No raw report format, command protocol, sample rate, or physiological scaling is assumed yet. Use the browser Diagnostics panel to make a short raw capture before implementing the emWave adapter.
+The device streams directly through HID without an initialization command in the tested configuration. Biofeedback Play preserves the raw waveform and treats its amplitude as uncalibrated.
 
 
 ## Observed streaming format
@@ -30,6 +30,29 @@ Current interpretation:
 - CC is an 8-bit packet counter that increments modulo 256.
 - S0 through S5 are six consecutive unsigned 8-bit pulse-waveform samples.
 
-The 310 reports in 5.013 seconds correspond to approximately 61.84 reports/second. Six samples per report correspond to approximately 371 samples/second over that capture. The live adapter currently uses 375 Hz as a nominal sample rate for display timing, while preserving the original 8-bit samples unchanged.
+The 310 reports in 5.013 seconds correspond to approximately 61.84 reports/second. Six samples per report correspond to approximately 371 samples/second over that capture.
 
-This interpretation is experimental and capture-derived. Do not treat the nominal sample rate as a manufacturer specification unless independently documented.
+HeartMath's emWave Pro Plus feature documentation specifies a 370 Hz pulse-wave sample rate, which closely matches the observed capture. Biofeedback Play therefore uses 370 Hz as the nominal sample rate while preserving the original 8-bit samples unchanged.
+
+Reference:
+https://cdn.heartmath.com/manuals/emWave%20Pro%20Plus%20Features%20Sheet.pdf
+
+The exact HID framing interpretation remains capture-derived.
+
+
+## Multiple modules
+
+Biofeedback Play can open up to four simultaneously connected emWave USB modules by HID path.
+
+The first four current-session slots are named emWave 1 through emWave 4. Because the modules do not expose a useful serial number in the observed HID descriptor, these slot numbers should not be treated as permanent physical identities across unplug/replug cycles.
+
+When two pulse sources are live, Biofeedback Play can derive pairwise:
+
+- heart-rate difference
+- median nearest-beat timing offset
+- recent waveform correlation
+- relative raw pulse amplitude
+
+HeartMath itself documents simultaneous dual-sensor comparison using one sensor on each earlobe. Biofeedback Play extends that idea to direct raw-waveform comparisons.
+
+Timing offsets are experimental. Separate USB devices are not hardware-synchronized, so the offset must not be interpreted as clinical pulse-transit time.
