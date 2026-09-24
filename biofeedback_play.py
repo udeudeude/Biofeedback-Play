@@ -1097,9 +1097,26 @@ class BiofeedbackState:
                     "battery": self.muse_battery,
                 },
             }
+            for unit_number, runtime in self.emwave_extra_units.items():
+                if runtime["seen"] or runtime["connected"]:
+                    device_id = emwave_device_id(unit_number)
+                    status_by_device[device_id] = {
+                        "connected": runtime["connected"],
+                        "running": runtime["running"],
+                        "error": runtime["error"],
+                        "sample_count": runtime["seq"],
+                        "packet_count": runtime["packet_count"],
+                        "packet_gaps": runtime["gap_count"],
+                    }
+
             out = []
             for device_id, definition in DEVICE_DEFINITIONS.items():
-                item = {"id": device_id, **definition, **status_by_device[device_id]}
+                status = status_by_device.get(device_id)
+                if status is None:
+                    if definition.get("optional"):
+                        continue
+                    continue
+                item = {"id": device_id, **definition, **status}
                 item["signals"] = [
                     signal_id
                     for signal_id, signal in SIGNAL_DEFINITIONS.items()
@@ -1112,7 +1129,9 @@ class BiofeedbackState:
         devices = {item["id"]: item for item in self.device_catalog()}
         signals = []
         for signal_id, definition in SIGNAL_DEFINITIONS.items():
-            device = devices[definition["device_id"]]
+            device = devices.get(definition["device_id"])
+            if device is None:
+                continue
             sample_count = device["sample_count"]
             if signal_id.startswith("muse.accel."):
                 sample_count = device.get("accel_sample_count", 0)
@@ -1164,6 +1183,12 @@ class BiofeedbackState:
             elif definition["device_id"] == "emwave":
                 source = [
                     sample for sample in self.emwave_samples if sample["seq"] > seq
+                ][-1500:]
+            elif definition["device_id"].startswith("emwave") and definition["device_id"][6:].isdigit():
+                unit_number = int(definition["device_id"][6:])
+                runtime = self.emwave_extra_units.get(unit_number)
+                source = [] if runtime is None else [
+                    sample for sample in runtime["samples"] if sample["seq"] > seq
                 ][-1500:]
             elif definition["device_id"] == "muse":
                 if signal_id.startswith("muse.eeg."):
