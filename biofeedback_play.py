@@ -1688,6 +1688,7 @@ class BiofeedbackState:
 
     def _emwave_reader_loop(self) -> None:
         device = None
+        active_path = None
 
         while not self.shutdown:
             with self.lock:
@@ -1700,20 +1701,38 @@ class BiofeedbackState:
                     except Exception:
                         pass
                     device = None
+                    active_path = None
+                with self.lock:
+                    self.emwave_connected = False
                 time.sleep(0.1)
                 continue
 
             try:
-                if device is None:
-                    if not hid.enumerate(EMWAVE_VENDOR_ID, EMWAVE_PRODUCT_ID):
-                        with self.lock:
-                            self.emwave_connected = False
-                            self.emwave_last_error = ""
-                        time.sleep(1.0)
-                        continue
+                paths = emwave_hid_paths()
+                if not paths:
+                    with self.lock:
+                        self.emwave_connected = False
+                        self.emwave_last_error = ""
+                    if device is not None:
+                        try:
+                            device.close()
+                        except Exception:
+                            pass
+                        device = None
+                        active_path = None
+                    time.sleep(1.0)
+                    continue
 
+                wanted_path = paths[0]
+                if device is None or active_path != wanted_path:
+                    if device is not None:
+                        try:
+                            device.close()
+                        except Exception:
+                            pass
                     device = hid.device()
-                    device.open(EMWAVE_VENDOR_ID, EMWAVE_PRODUCT_ID)
+                    device.open_path(wanted_path)
+                    active_path = wanted_path
                     with self.lock:
                         self.emwave_connected = True
                         self.emwave_last_error = ""
@@ -1725,7 +1744,7 @@ class BiofeedbackState:
 
                 parsed = self.emwave_parser.feed_report(report)
                 if parsed is not None:
-                    self._store_emwave_packet(parsed)
+                    self._store_emwave_packet(parsed, 1)
 
             except Exception as exc:
                 with self.lock:
@@ -1737,6 +1756,91 @@ class BiofeedbackState:
                     except Exception:
                         pass
                     device = None
+                    active_path = None
+                time.sleep(1.0)
+
+        if device is not None:
+            try:
+                device.close()
+            except Exception:
+                pass
+
+    def _emwave_extra_reader_loop(self, unit_number: int) -> None:
+        device = None
+        active_path = None
+        path_index = unit_number - 1
+
+        while not self.shutdown:
+            runtime = self.emwave_extra_units[unit_number]
+            with self.lock:
+                should_run = runtime["running"]
+
+            if not should_run:
+                if device is not None:
+                    try:
+                        device.close()
+                    except Exception:
+                        pass
+                    device = None
+                    active_path = None
+                with self.lock:
+                    runtime["connected"] = False
+                time.sleep(0.1)
+                continue
+
+            try:
+                paths = emwave_hid_paths()
+                if len(paths) <= path_index:
+                    with self.lock:
+                        runtime["connected"] = False
+                        runtime["error"] = ""
+                    if device is not None:
+                        try:
+                            device.close()
+                        except Exception:
+                            pass
+                        device = None
+                        active_path = None
+                    time.sleep(1.0)
+                    continue
+
+                wanted_path = paths[path_index]
+                with self.lock:
+                    runtime["seen"] = True
+
+                if device is None or active_path != wanted_path:
+                    if device is not None:
+                        try:
+                            device.close()
+                        except Exception:
+                            pass
+                    device = hid.device()
+                    device.open_path(wanted_path)
+                    active_path = wanted_path
+                    with self.lock:
+                        runtime["connected"] = True
+                        runtime["error"] = ""
+                        runtime["parser"] = EmWaveParser()
+
+                report = device.read(8, 500)
+                if not report:
+                    continue
+
+                parsed = runtime["parser"].feed_report(report)
+                if parsed is not None:
+                    self._store_emwave_packet(parsed, unit_number)
+
+            except Exception as exc:
+                with self.lock:
+                    runtime["connected"] = False
+                    runtime["error"] = str(exc)
+                if device is not None:
+                    try:
+                        device.close()
+                    except Exception:
+                        pass
+                    device = None
+                    active_path = None
                 time.sleep(1.0)
 
         if device is not None:
