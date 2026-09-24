@@ -33,6 +33,21 @@ If the required source device is not connected, the panel collapses automaticall
 
 Each live panel has an independent **Audio** control. Audio is generated locally with the Web Audio API. It is sonification, not a reconstructed heartbeat or diagnostic sound.
 
+### Visual language
+
+The live workspace uses a consistent visual grammar:
+
+- each input device has its own accent color, reused on signal panels, source chips, setup cards, and graph traces
+- direct sensor streams carry a **Direct** badge and solid graph line
+- single-device calculations carry a **Calculated** badge and dashed graph line
+- cross-device calculations carry a **Cross-device** badge and a multi-device accent stripe
+- panels explicitly list every device that contributes data
+- live panels sort ahead of disconnected panels
+- disconnected panels stay compact instead of stretching to match a neighboring live panel
+- the toolbar can filter the workspace to All, Direct, Calculated, or Comparisons
+
+These distinctions are intentionally secondary to the signal names and values: they should help orientation without turning the dashboard into a color-key puzzle.
+
 ### Device setup
 
 This tab contains:
