@@ -1,13 +1,14 @@
 # Biofeedback Play
 
-Biofeedback Play is a local, device-agnostic workspace for live physiological signals, visual feedback, audio sonification, recording, diagnostics, and creative-control output.
+Biofeedback Play is a local, device-agnostic workspace for live physiological signals, visual feedback, audio sonification, recording, diagnostics, derived metrics, and creative-control output.
 
 Currently supported live devices:
 
 - Wild Divine Lightstone, USB HID 0x14FA:0x0001
-- HeartMath emWave Pulse Sensor, USB HID 0x0E30:0x0002
+- HeartMath emWave USB Pulse Sensor, USB HID 0x0E30:0x0002
+- InteraXon Muse 2014 / MU-01, classic Bluetooth serial
 
-The architecture is intentionally organized around devices and signals so later adapters such as Muse and MindFlex can add channels without redesigning the interface.
+Up to four emWave USB modules can be opened simultaneously. Additional units are presented as emWave 2, emWave 3, and emWave 4 for the current session.
 
 ## Interface
 
@@ -17,20 +18,20 @@ The browser interface has two primary tabs.
 
 This is the live-feedback workspace.
 
-Each configured signal gets its own panel. A panel identifies:
+Each raw or derived signal gets its own panel. Panels identify:
 
-- the source device
-- what signal is being displayed
+- the source device or device pair
+- what is being measured or calculated
 - units and interpretation cautions
 - current value and recent range
 - total samples received
-- nominal sample rate when known
+- nominal update/sample rate when known
 - OSC address
 - useful device-specific status such as emWave packet gaps
 
-If the source device is not connected, its signal panels collapse automatically.
+If the required source device is not connected, the panel collapses automatically.
 
-Each live signal panel also has its own **Audio** control. Audio is generated locally with the browser Web Audio API. It is a sonification of the changing sensor value, not a reconstructed heartbeat or diagnostic sound. Each signal can be turned on or off independently.
+Each live panel has an independent **Audio** control. Audio is generated locally with the Web Audio API. It is sonification, not a reconstructed heartbeat or diagnostic sound.
 
 ### Device setup
 
@@ -38,55 +39,129 @@ This tab contains:
 
 - configured-device connection state
 - start/stop acquisition controls per device
-- USB identity and transport information
+- USB/Bluetooth identity and transport information
+- Muse serial-port setup
 - global OSC settings
 - HID scanning and diagnostics
 - raw report capture
+- notes for multi-emWave experiments
 
 Obviously unrelated HID devices such as keyboards, trackpads, cameras, storage devices, and Touch Bar interfaces are hidden by default in diagnostics. Unknown hardware remains visible.
 
-## Current signals
+## Raw signals
 
 ### Wild Divine Lightstone
 
-- **Skin conductance**: raw skin-conductance channel from the two plain finger electrodes
-- **Pulse waveform**: raw blood-volume pulse waveform from the gold-dot finger sensor
-
-The raw channels were identified experimentally by sensor-removal tests. Values are kept in their original device units.
+- raw skin conductance
+- raw pulse / blood-volume waveform
 
 ### HeartMath emWave
 
-- **Pulse waveform**: direct 8-bit optical pulse waveform from the ear clip
+- raw 8-bit optical pulse waveform from each connected module
 
-Observed emWave reports have the experimental form:
+Observed emWave reports have the form:
 
     01 CC S0 S1 S2 S3 S4 S5
 
-where CC behaves as an 8-bit packet counter and S0 through S5 behave as six consecutive waveform samples. Biofeedback Play tracks packet gaps. Display timing currently uses 375 Hz as a nominal rate derived from capture behavior rather than as a manufacturer specification.
+where CC behaves as an 8-bit packet counter and S0 through S5 behave as six consecutive waveform samples.
+
+A local capture produced about 371 samples/second. HeartMath documentation for emWave Pro Plus specifies a 370 Hz pulse-wave sample rate, so Biofeedback Play now uses 370 Hz as the nominal emWave rate.
+
+### Muse 2014 / MU-01
+
+- EEG TP9
+- EEG FP1
+- EEG FP2
+- EEG TP10
+- head motion X
+- head motion Y
+- head motion Z
+
+The current Muse adapter treats EEG as nominally 500 Hz and accelerometer data as nominally 50 Hz. EEG microvolt scaling remains explicitly experimental; accelerometer values are preserved as raw signed counts.
+
+## Derived physiology panels
+
+### Pulse-derived panels
+
+For Lightstone and every connected emWave:
+
+- heart rate
+- inter-beat interval
+- HRV RMSSD
+- HRV SDNN
+- pNN50
+- open coherence ratio
+- coherence peak share
+- experimental breathing-rate estimate from HRV
+- pulse amplitude
+- beat-detection confidence
+
+The coherence panels are open calculations based on the concentration of HRV spectral power around a dominant peak in the coherence range. They are not presented as HeartMath's proprietary emWave coherence score.
+
+### Skin-conductance panels
+
+From Lightstone:
+
+- tonic skin level
+- phasic skin activity
+- recent skin-conductance trend
+- relative phasic response rate
+- skin-conductance variability
+
+Because the Lightstone stream is not calibrated to microsiemens, Biofeedback Play keeps these measures in raw device units and uses relative thresholds rather than pretending they are standardized EDA measurements.
+
+### Muse-derived panels
+
+When Muse is connected:
+
+- delta power
+- theta power
+- alpha power
+- beta power
+- gamma power
+- frontal alpha asymmetry
+- broadband EEG RMS
+- head-motion intensity
+
+These are signal features, not mind-reading labels. Biofeedback Play deliberately does not rename them “peace,” “focus,” “stress,” or similar psychological states.
+
+## Multiple pulse sensors
+
+When more than one pulse sensor is live, comparison panels appear automatically.
+
+Current pairwise measures include:
+
+- heart-rate difference
+- median beat timing offset
+- waveform correlation
+- relative raw pulse amplitude
+
+This supports experiments such as:
+
+- one emWave on each earlobe
+- emWave ear sensor plus a compatible finger sensor
+- Lightstone pulse sensor versus emWave
+- multiple emWave sensors on different people for exploratory rhythm comparisons
+
+The timing-offset panel is intentionally **not** labeled pulse-transit time. USB scheduling, device buffering, optical sensor latency, and placement all contribute to the measured offset.
 
 ## Recording
 
-Recording is session-wide rather than tied to one device. Connected signals are written to one long-format CSV file under recordings/:
+Recording is session-wide. Raw and derived signals are written into one long-format CSV file under recordings/:
 
     unix_time, elapsed_s, device_id, signal_id, value
 
-This format allows different devices and sample rates to coexist in one session.
+This allows devices with different sample rates to coexist in one session.
 
 ## OSC
 
-OSC is off by default. The Device setup tab can enable it and choose a host and port.
+OSC is off by default. Device setup can enable it and select the destination host and port.
 
 Default destination:
 
     127.0.0.1:57120
 
-Current messages:
-
-    /biofeedback/lightstone/skin_raw
-    /biofeedback/lightstone/pulse_raw
-    /biofeedback/emwave/pulse_raw
-
-Each currently carries one integer argument.
+Every signal definition has an OSC address, including derived measures and additional emWave units.
 
 A starter SuperCollider receiver is included under supercollider/.
 
@@ -109,7 +184,7 @@ The normal workflow is to double-click:
 
     Biofeedback Play.command
 
-The launcher checks GitHub for a safe fast-forward update, creates the local Python environment if necessary, installs required dependencies, starts the local service, and opens the browser interface.
+The launcher checks GitHub for a safe fast-forward update, creates the local Python environment if necessary, installs dependencies, starts the local service, and opens the browser interface.
 
 For manual development use:
 
@@ -121,42 +196,8 @@ The interface opens at:
 
     http://127.0.0.1:8765
 
-## Design direction
+## Design principle
 
-Hardware-specific readers feed a shared device/signal model. Visualization, audio feedback, recording, OSC, future MIDI output, and later experiments consume those signals rather than being hard-coded to one piece of hardware.
+Hardware-specific readers feed a shared device/signal model. Visualization, audio feedback, recording, OSC, diagnostics, and derived physiology consume those signals rather than being hard-coded to one device.
 
-Derived physiology remains conservative. Raw signals come first; heart-rate detection, smoothing, calibration, signal quality, spectral analysis, and other derived measurements should remain explicit layers rather than silently changing source data.
-
-
-## Muse 2014 / MU-01
-
-Biofeedback Play now includes an experimental adapter for the first-generation InteraXon Muse MU-01.
-
-The MU-01 uses classic Bluetooth RFCOMM rather than Bluetooth Low Energy. On macOS the current adapter expects the paired headband to appear as a virtual serial port under /dev/cu.*.
-
-Device setup includes Muse-specific controls to:
-
-- open macOS Bluetooth Settings
-- scan serial ports
-- identify likely Muse ports
-- save the selected port
-- start or stop Muse acquisition
-
-If exactly one serial port is clearly named as a Muse, Biofeedback Play can select it automatically.
-
-Current live Muse panels:
-
-- EEG TP9
-- EEG FP1
-- EEG FP2
-- EEG TP10
-- head motion X
-- head motion Y
-- head motion Z
-
-The EEG stream is treated as nominally 500 Hz using preset AD. Accelerometer data is treated as nominally 50 Hz. EEG microvolt scaling is explicitly experimental; accelerometer values are kept as raw signed 10-bit counts. Battery telemetry and AFE gain are shown in Device setup.
-
-The Muse protocol adapter is based on the clean-room, MIT-licensed Muse 2014 implementation by Matthew Piercey:
-https://github.com/mtpiercey/muse-2014-lsl
-
-If modern macOS does not expose a usable RFCOMM virtual serial port after pairing, the next fallback is a native IOBluetooth bridge rather than asking the user to operate the protocol manually from Terminal.
+Raw measurements remain visible beside derived quantities. Derived metrics are explicitly labeled where calibration, window length, or algorithmic assumptions limit interpretation.
