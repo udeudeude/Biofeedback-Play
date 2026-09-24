@@ -398,6 +398,14 @@ SIGNAL_DEFINITIONS.update({
         requires_devices=["lightstone", "emwave"],
         source_name="Lightstone + emWave",
     ),
+    "comparison.lightstone_emwave.amplitude_ratio": _derived_signal(
+        "emwave", "Relative pulse amplitude", "Lightstone / emWave pulse amplitude ratio", "ratio",
+        "Ratio of recent raw pulse-wave amplitudes. Useful for comparing contact quality and placement, but the sensors are uncalibrated so it is not a blood-flow ratio.",
+        "/biofeedback/comparison/lightstone_emwave/amplitude_ratio",
+        "amplitude_ratio", precision=3,
+        requires_devices=["lightstone", "emwave"],
+        source_name="Lightstone + emWave",
+    ),
 })
 
 
