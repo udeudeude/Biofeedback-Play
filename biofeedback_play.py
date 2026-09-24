@@ -401,6 +401,126 @@ SIGNAL_DEFINITIONS.update({
 })
 
 
+def emwave_device_id(index: int) -> str:
+    return "emwave" if index == 1 else f"emwave{index}"
+
+
+def emwave_display_name(index: int) -> str:
+    return f"HeartMath emWave {index}"
+
+
+def emwave_osc_prefix(index: int) -> str:
+    return "/biofeedback/emwave" if index == 1 else f"/biofeedback/emwave/{index}"
+
+
+for _emwave_index in range(2, 5):
+    _device_id = emwave_device_id(_emwave_index)
+    DEVICE_DEFINITIONS[_device_id] = {
+        "name": emwave_display_name(_emwave_index),
+        "manufacturer": "HeartMath / Quantum Intech",
+        "transport": "USB HID",
+        "usb_id": "0e30:0002",
+        "summary": (
+            "Additional emWave ear-clip optical pulse sensor. "
+            "The app keeps each simultaneously connected unit in its own session slot."
+        ),
+        "optional": True,
+    }
+    SIGNAL_DEFINITIONS[f"{_device_id}.pulse_raw"] = {
+        "device_id": _device_id,
+        "name": "Pulse waveform",
+        "short_name": "Pulse",
+        "data_label": "Raw 8-bit optical pulse waveform",
+        "unit": "0–255 raw units",
+        "description": (
+            f"Direct USB waveform from {emwave_display_name(_emwave_index)}. "
+            "The packet interpretation remains capture-derived and experimental."
+        ),
+        "audio": "Pitch follows the recent pulse-wave shape.",
+        "osc": f"{emwave_osc_prefix(_emwave_index)}/pulse_raw",
+        "nominal_rate": EMWAVE_NOMINAL_SAMPLE_RATE,
+        "value_key": "pulse",
+    }
+    SIGNAL_DEFINITIONS.update(
+        _pulse_derived_definitions(
+            _device_id,
+            f"emWave {_emwave_index} ear clip",
+            emwave_osc_prefix(_emwave_index),
+        )
+    )
+
+
+def _add_pair_signal_definitions(
+    first_id: str,
+    second_id: str,
+    first_name: str,
+    second_name: str,
+    pair_key: str,
+) -> None:
+    source_name = f"{first_name} + {second_name}"
+    osc_base = f"/biofeedback/comparison/{pair_key}"
+    common = {
+        "requires_devices": [first_id, second_id],
+        "source_name": source_name,
+    }
+    SIGNAL_DEFINITIONS[f"comparison.{pair_key}.hr_difference"] = _derived_signal(
+        second_id,
+        "Pulse-source HR difference",
+        f"{first_name} vs {second_name} heart-rate difference",
+        "beats/min",
+        "Absolute difference between independently detected heart rates. Useful as a cross-check between sensors.",
+        f"{osc_base}/hr_difference",
+        "heart_rate_difference_bpm",
+        precision=2,
+        **common,
+    )
+    SIGNAL_DEFINITIONS[f"comparison.{pair_key}.beat_offset"] = _derived_signal(
+        second_id,
+        "Pulse-source beat offset",
+        f"{first_name} vs {second_name} beat timing offset",
+        "ms",
+        "Median nearest-beat timing difference. Sensor placement, optical path, USB scheduling, and buffering all contribute, so this is not a medical pulse-transit-time measurement.",
+        f"{osc_base}/beat_offset_ms",
+        "beat_offset_ms",
+        precision=1,
+        **common,
+    )
+    SIGNAL_DEFINITIONS[f"comparison.{pair_key}.correlation"] = _derived_signal(
+        second_id,
+        "Pulse-source correlation",
+        f"{first_name} vs {second_name} waveform correlation",
+        "correlation −1…1",
+        "Experimental recent waveform similarity after interpolation. Different sensor shapes, clipping, placement, and timing offsets can reduce it.",
+        f"{osc_base}/correlation",
+        "waveform_correlation",
+        precision=3,
+        **common,
+    )
+
+
+for _emwave_index in range(2, 5):
+    _device_id = emwave_device_id(_emwave_index)
+    _add_pair_signal_definitions(
+        "lightstone",
+        _device_id,
+        "Lightstone",
+        f"emWave {_emwave_index}",
+        f"lightstone_emwave{_emwave_index}",
+    )
+
+for _first_index in range(1, 5):
+    for _second_index in range(_first_index + 1, 5):
+        _first_id = emwave_device_id(_first_index)
+        _second_id = emwave_device_id(_second_index)
+        _add_pair_signal_definitions(
+            _first_id,
+            _second_id,
+            f"emWave {_first_index}",
+            f"emWave {_second_index}",
+            f"emwave{_first_index}_emwave{_second_index}",
+        )
+
+
 class EmWaveParser:
     """Experimental parser based on captures from emWave USB 0x0E30:0x0002.
 
