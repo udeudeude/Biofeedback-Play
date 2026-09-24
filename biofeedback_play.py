@@ -722,7 +722,7 @@ class BiofeedbackState:
         self.last_error = ""
         self.seq = 0
         self.started_monotonic = time.monotonic()
-        self.samples = deque(maxlen=2400)
+        self.samples = deque(maxlen=5000)
 
         self.recording = False
         self.recording_path = ""
@@ -744,7 +744,7 @@ class BiofeedbackState:
         self.emwave_seq = 0
         self.emwave_packet_count = 0
         self.emwave_gap_count = 0
-        self.emwave_samples = deque(maxlen=12000)
+        self.emwave_samples = deque(maxlen=36000)
         self.emwave_parser = EmWaveParser()
         self.emwave_thread = threading.Thread(target=self._emwave_reader_loop, daemon=True)
         self.emwave_thread.start()
@@ -763,6 +763,15 @@ class BiofeedbackState:
         self.muse_accel_samples = deque(maxlen=4000)
         self.muse_thread = threading.Thread(target=self._muse_reader_loop, daemon=True)
         self.muse_thread.start()
+
+        self.derived_samples = {
+            signal_id: deque(maxlen=900)
+            for signal_id, definition in SIGNAL_DEFINITIONS.items()
+            if definition.get("derived")
+        }
+        self.derived_seq = {signal_id: 0 for signal_id in self.derived_samples}
+        self.analysis_thread = threading.Thread(target=self._analysis_loop, daemon=True)
+        self.analysis_thread.start()
 
     def set_running(self, value: bool) -> None:
         with self.lock:
@@ -945,14 +954,20 @@ class BiofeedbackState:
                 sample_count = device.get("accel_sample_count", 0)
             elif signal_id.startswith("muse.eeg."):
                 sample_count = device.get("eeg_sample_count", 0)
+            if definition.get("derived"):
+                sample_count = self.derived_seq.get(signal_id, 0)
+
+            required = definition.get("requires_devices") or [definition["device_id"]]
+            connected = all(devices.get(req, {}).get("connected", False) for req in required)
+            running = all(devices.get(req, {}).get("running", False) for req in required)
 
             signals.append(
                 {
                     "id": signal_id,
                     **definition,
-                    "device_name": device["name"],
-                    "connected": device["connected"],
-                    "running": device["running"],
+                    "device_name": definition.get("source_name") or device["name"],
+                    "connected": connected,
+                    "running": running,
                     "device_error": device["error"],
                     "sample_count": sample_count,
                     "packet_gaps": device.get("packet_gaps"),
@@ -969,6 +984,17 @@ class BiofeedbackState:
 
         key = definition["value_key"]
         with self.lock:
+            if definition.get("derived"):
+                source = [
+                    sample
+                    for sample in self.derived_samples.get(signal_id, ())
+                    if sample["seq"] > seq
+                ][-600:]
+                return [
+                    {"seq": sample["seq"], "t": sample["t"], "value": sample["value"]}
+                    for sample in source
+                ]
+
             if definition["device_id"] == "lightstone":
                 source = [sample for sample in self.samples if sample["seq"] > seq][-600:]
             elif definition["device_id"] == "emwave":
@@ -1006,6 +1032,146 @@ class BiofeedbackState:
                 sample for sample in self.emwave_samples if sample["seq"] > seq
             ][-1200:]
 
+
+    def _store_derived(self, signal_id: str, value: float | int | None, elapsed: float) -> None:
+        if value is None:
+            return
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return
+        if not math.isfinite(numeric):
+            return
+
+        definition = SIGNAL_DEFINITIONS.get(signal_id)
+        if definition is None:
+            return
+
+        with self.lock:
+            if signal_id not in self.derived_samples:
+                self.derived_samples[signal_id] = deque(maxlen=900)
+                self.derived_seq[signal_id] = 0
+            self.derived_seq[signal_id] += 1
+            sample = {"seq": self.derived_seq[signal_id], "t": elapsed, "value": numeric}
+            self.derived_samples[signal_id].append(sample)
+
+            if self.recording and self.recording_writer:
+                self.recording_writer.writerow(
+                    [
+                        f"{time.time():.6f}",
+                        f"{elapsed:.6f}",
+                        definition["device_id"],
+                        signal_id,
+                        numeric,
+                    ]
+                )
+
+            if self.osc_enabled:
+                try:
+                    self.osc_socket.sendto(
+                        osc_message(definition["osc"], numeric),
+                        (self.osc_host, self.osc_port),
+                    )
+                except OSError:
+                    pass
+
+    def _analysis_loop(self) -> None:
+        pulse_maps = {
+            "lightstone": {
+                "heart_rate_bpm": "lightstone.heart_rate",
+                "ibi_ms": "lightstone.ibi",
+                "rmssd_ms": "lightstone.hrv_rmssd",
+                "sdnn_ms": "lightstone.hrv_sdnn",
+                "pnn50_percent": "lightstone.pnn50",
+                "coherence_ratio": "lightstone.coherence_ratio",
+                "coherence_peak_percent": "lightstone.coherence_peak",
+                "respiration_bpm": "lightstone.respiration_estimate",
+                "pulse_amplitude": "lightstone.pulse_amplitude",
+                "beat_confidence_percent": "lightstone.beat_confidence",
+            },
+            "emwave": {
+                "heart_rate_bpm": "emwave.heart_rate",
+                "ibi_ms": "emwave.ibi",
+                "rmssd_ms": "emwave.hrv_rmssd",
+                "sdnn_ms": "emwave.hrv_sdnn",
+                "pnn50_percent": "emwave.pnn50",
+                "coherence_ratio": "emwave.coherence_ratio",
+                "coherence_peak_percent": "emwave.coherence_peak",
+                "respiration_bpm": "emwave.respiration_estimate",
+                "pulse_amplitude": "emwave.pulse_amplitude",
+                "beat_confidence_percent": "emwave.beat_confidence",
+            },
+        }
+        skin_map = {
+            "tonic_level": "lightstone.skin_tonic",
+            "phasic_level": "lightstone.skin_phasic",
+            "slope_per_min": "lightstone.skin_slope",
+            "response_rate_per_min": "lightstone.skin_responses",
+            "variability": "lightstone.skin_variability",
+        }
+        eeg_map = {
+            "delta_power": "muse.band.delta",
+            "theta_power": "muse.band.theta",
+            "alpha_power": "muse.band.alpha",
+            "beta_power": "muse.band.beta",
+            "gamma_power": "muse.band.gamma",
+            "alpha_asymmetry": "muse.alpha_asymmetry",
+            "broadband_rms": "muse.eeg_rms",
+        }
+
+        while not self.shutdown:
+            started = time.monotonic()
+            with self.lock:
+                light_connected = self.connected and self.running
+                emwave_connected = self.emwave_connected and self.emwave_running
+                muse_connected = self.muse_connected and self.muse_running
+                light = list(self.samples)
+                emwave = list(self.emwave_samples)
+                muse_eeg = list(self.muse_eeg_samples)
+                muse_accel = list(self.muse_accel_samples)
+
+            elapsed = time.monotonic() - self.started_monotonic
+
+            if light_connected:
+                light_pulse_points = [(s["t"], s["pulse"]) for s in light]
+                metrics = pulse_metrics(light_pulse_points)
+                for key, signal_id in pulse_maps["lightstone"].items():
+                    self._store_derived(signal_id, metrics.get(key), elapsed)
+
+                skin = skin_metrics([(s["t"], s["skin"]) for s in light])
+                for key, signal_id in skin_map.items():
+                    self._store_derived(signal_id, skin.get(key), elapsed)
+            else:
+                light_pulse_points = []
+
+            if emwave_connected:
+                emwave_points = [(s["t"], s["pulse"]) for s in emwave]
+                metrics = pulse_metrics(emwave_points)
+                for key, signal_id in pulse_maps["emwave"].items():
+                    self._store_derived(signal_id, metrics.get(key), elapsed)
+            else:
+                emwave_points = []
+
+            if light_connected and emwave_connected:
+                comparison = pair_metrics(light_pulse_points, emwave_points)
+                for key, signal_id in {
+                    "heart_rate_difference_bpm": "comparison.lightstone_emwave.hr_difference",
+                    "beat_offset_ms": "comparison.lightstone_emwave.beat_offset",
+                    "waveform_correlation": "comparison.lightstone_emwave.correlation",
+                }.items():
+                    self._store_derived(signal_id, comparison.get(key), elapsed)
+
+            if muse_connected:
+                eeg = eeg_metrics(muse_eeg, MUSE_EEG_RATE)
+                for key, signal_id in eeg_map.items():
+                    self._store_derived(signal_id, eeg.get(key), elapsed)
+                motion = motion_metrics(muse_accel)
+                self._store_derived(
+                    "muse.motion_intensity", motion.get("motion_intensity"), elapsed
+                )
+
+            delay = max(0.15, 1.0 - (time.monotonic() - started))
+            time.sleep(delay)
 
     def _store_muse_eeg(self, decoded: dict) -> None:
         values = decoded["microvolts"]
