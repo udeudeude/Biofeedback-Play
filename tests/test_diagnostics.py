@@ -1,6 +1,12 @@
 import unittest
 
-from biofeedback_play import EmWaveParser, capture_summary, hid_is_obviously_unrelated
+from biofeedback_play import (
+    EmWaveParser,
+    SIGNAL_DEFINITIONS,
+    capture_summary,
+    emwave_device_id,
+    hid_is_obviously_unrelated,
+)
 
 
 class DiagnosticsTests(unittest.TestCase):
@@ -62,6 +68,14 @@ class DiagnosticsTests(unittest.TestCase):
         )
         self.assertFalse(hidden)
         self.assertEqual(reason, "")
+
+    def test_multiple_emwave_signal_definitions_exist(self):
+        self.assertEqual(emwave_device_id(1), "emwave")
+        self.assertEqual(emwave_device_id(2), "emwave2")
+        self.assertIn("emwave2.pulse_raw", SIGNAL_DEFINITIONS)
+        self.assertIn("emwave2.heart_rate", SIGNAL_DEFINITIONS)
+        self.assertIn("comparison.emwave1_emwave2.beat_offset", SIGNAL_DEFINITIONS)
+        self.assertIn("comparison.emwave1_emwave2.amplitude_ratio", SIGNAL_DEFINITIONS)
 
 
 if __name__ == "__main__":
