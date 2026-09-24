@@ -704,6 +704,18 @@ def hid_device_list() -> list[dict]:
     return devices
 
 
+def emwave_hid_paths() -> list[bytes]:
+    paths: list[bytes] = []
+    for item in hid.enumerate(EMWAVE_VENDOR_ID, EMWAVE_PRODUCT_ID):
+        path = item.get("path")
+        if path is None:
+            continue
+        if isinstance(path, str):
+            path = path.encode("utf-8")
+        paths.append(bytes(path))
+    return sorted(paths)
+
+
 def hid_device_for_token(token: str) -> dict:
     for device in hid_device_list():
         if device["path_token"] == token:
@@ -870,6 +882,28 @@ class BiofeedbackState:
         self.emwave_thread = threading.Thread(target=self._emwave_reader_loop, daemon=True)
         self.emwave_thread.start()
 
+        self.emwave_extra_units = {}
+        for unit_number in range(2, 5):
+            runtime = {
+                "unit_number": unit_number,
+                "running": True,
+                "connected": False,
+                "seen": False,
+                "error": "",
+                "seq": 0,
+                "packet_count": 0,
+                "gap_count": 0,
+                "samples": deque(maxlen=36000),
+                "parser": EmWaveParser(),
+            }
+            self.emwave_extra_units[unit_number] = runtime
+            runtime["thread"] = threading.Thread(
+                target=self._emwave_extra_reader_loop,
+                args=(unit_number,),
+                daemon=True,
+            )
+            runtime["thread"].start()
+
         settings = load_settings()
         self.muse_running = True
         self.muse_connected = False
@@ -926,6 +960,15 @@ class BiofeedbackState:
             self.set_running(value)
         elif device_id == "emwave":
             self.set_emwave_running(value)
+        elif device_id.startswith("emwave") and device_id[6:].isdigit():
+            unit_number = int(device_id[6:])
+            runtime = self.emwave_extra_units.get(unit_number)
+            if runtime is None:
+                raise ValueError(f"Unknown emWave unit: {device_id}")
+            with self.lock:
+                runtime["running"] = bool(value)
+                if not runtime["running"]:
+                    runtime["connected"] = False
         elif device_id == "muse":
             self.set_muse_running(value)
         else:
