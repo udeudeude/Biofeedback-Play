@@ -249,7 +249,7 @@ def pulse_metrics(points: Iterable[tuple[float, float]]) -> dict[str, float | No
             )
             total_power = sum(p for f, p in spectrum.items() if 0.01 <= f <= 0.40)
             remainder = max(1e-12, total_power - peak_power)
-            if total_power > 0:
+            if total_power > 0 and duration >= 60.0:
                 result["coherence_ratio"] = peak_power / remainder
                 result["coherence_peak_percent"] = 100.0 * peak_power / total_power
 
@@ -437,6 +437,7 @@ def pair_metrics(
         "heart_rate_difference_bpm": None,
         "beat_offset_ms": None,
         "waveform_correlation": None,
+        "amplitude_ratio": None,
     }
     if len(a) < 8 or len(b) < 8:
         return result
@@ -445,6 +446,11 @@ def pair_metrics(
     mb = pulse_metrics(b)
     if ma["heart_rate_bpm"] is not None and mb["heart_rate_bpm"] is not None:
         result["heart_rate_difference_bpm"] = abs(float(ma["heart_rate_bpm"]) - float(mb["heart_rate_bpm"]))
+
+    amp_a = ma.get("pulse_amplitude")
+    amp_b = mb.get("pulse_amplitude")
+    if amp_a is not None and amp_b is not None and float(amp_b) > 1e-9:
+        result["amplitude_ratio"] = float(amp_a) / float(amp_b)
 
     peaks_a = detect_pulse_peaks(a)
     peaks_b = detect_pulse_peaks(b)
