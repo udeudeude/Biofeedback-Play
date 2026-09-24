@@ -923,6 +923,9 @@ class BiofeedbackState:
         self.muse_version = ""
         self.muse_afe_gain = None
         self.muse_battery = None
+        self.muse_last_data_monotonic = 0.0
+        self.muse_last_eeg_monotonic = 0.0
+        self.muse_last_accel_monotonic = 0.0
         self.muse_eeg_seq = 0
         self.muse_accel_seq = 0
         self.muse_eeg_samples = deque(maxlen=12000)
@@ -1068,7 +1071,10 @@ class BiofeedbackState:
                 "emwave_packet_count": self.emwave_packet_count,
                 "emwave_gap_count": self.emwave_gap_count,
                 "muse_running": self.muse_running,
-                "muse_connected": self.muse_connected,
+                "muse_connected": (
+                    self.muse_connected
+                    and time.monotonic() - self.muse_last_data_monotonic < 3.0
+                ),
                 "muse_last_error": self.muse_last_error,
                 "muse_port": self.muse_port,
                 "muse_version": self.muse_version,
@@ -1096,10 +1102,21 @@ class BiofeedbackState:
                     "packet_gaps": self.emwave_gap_count,
                 },
                 "muse": {
-                    "connected": self.muse_connected,
+                    "connected": (
+                        self.muse_connected
+                        and time.monotonic() - self.muse_last_data_monotonic < 3.0
+                    ),
                     "running": self.muse_running,
                     "error": self.muse_last_error,
                     "sample_count": self.muse_eeg_seq,
+                    "eeg_fresh": (
+                        self.muse_last_eeg_monotonic > 0
+                        and time.monotonic() - self.muse_last_eeg_monotonic < 3.0
+                    ),
+                    "accel_fresh": (
+                        self.muse_last_accel_monotonic > 0
+                        and time.monotonic() - self.muse_last_accel_monotonic < 3.0
+                    ),
                     "eeg_sample_count": self.muse_eeg_seq,
                     "accel_sample_count": self.muse_accel_seq,
                     "port": self.muse_port,
@@ -1155,11 +1172,27 @@ class BiofeedbackState:
             connected = all(devices.get(req, {}).get("connected", False) for req in required)
             running = all(devices.get(req, {}).get("running", False) for req in required)
 
+            if definition["device_id"] == "muse":
+                if signal_id.startswith("muse.eeg.") or signal_id.startswith("muse.band.") or signal_id in {
+                    "muse.alpha_asymmetry",
+                    "muse.eeg_rms",
+                }:
+                    connected = connected and bool(device.get("eeg_fresh"))
+                elif signal_id.startswith("muse.accel.") or signal_id == "muse.motion_intensity":
+                    connected = connected and bool(device.get("accel_fresh"))
+
+            data_sources = [
+                devices[req]["name"]
+                for req in required
+                if req in devices
+            ]
+
             signals.append(
                 {
                     "id": signal_id,
                     **definition,
                     "device_name": definition.get("source_name") or device["name"],
+                    "data_sources": data_sources,
                     "connected": connected,
                     "running": running,
                     "device_error": device["error"],
@@ -1312,7 +1345,11 @@ class BiofeedbackState:
             with self.lock:
                 light_connected = self.connected and self.running
                 primary_emwave_connected = self.emwave_connected and self.emwave_running
-                muse_connected = self.muse_connected and self.muse_running
+                muse_connected = (
+                    self.muse_connected
+                    and self.muse_running
+                    and time.monotonic() - self.muse_last_data_monotonic < 3.0
+                )
                 light = list(self.samples)
                 primary_emwave = list(self.emwave_samples)
                 muse_eeg = list(self.muse_eeg_samples)
@@ -1421,6 +1458,9 @@ class BiofeedbackState:
         )
 
         with self.lock:
+            self.muse_connected = True
+            self.muse_last_data_monotonic = time.monotonic()
+            self.muse_last_eeg_monotonic = self.muse_last_data_monotonic
             self.muse_eeg_seq += 1
             sample = {"seq": self.muse_eeg_seq, "t": elapsed}
             for key, value in zip(keys, values):
@@ -1460,6 +1500,9 @@ class BiofeedbackState:
         )
 
         with self.lock:
+            self.muse_connected = True
+            self.muse_last_data_monotonic = time.monotonic()
+            self.muse_last_accel_monotonic = self.muse_last_data_monotonic
             self.muse_accel_seq += 1
             sample = {"seq": self.muse_accel_seq, "t": elapsed}
             for key, value in zip(keys, values):
@@ -1488,6 +1531,8 @@ class BiofeedbackState:
 
     def _store_muse_battery(self, battery: dict) -> None:
         with self.lock:
+            self.muse_connected = True
+            self.muse_last_data_monotonic = time.monotonic()
             self.muse_battery = battery
 
     def _store_muse_status(self, status) -> None:
@@ -1714,7 +1759,10 @@ class BiofeedbackState:
                     if port != self.muse_port:
                         client.close()
                         continue
-                    self.muse_connected = True
+                    # Opening a persistent macOS Bluetooth serial port is not proof
+                    # that the headband itself is present. "Connected" becomes true
+                    # only when actual Muse packets arrive.
+                    self.muse_connected = False
                     self.muse_last_error = ""
 
                 client.run(
@@ -2266,12 +2314,14 @@ function renderSignalPanels(signals) {
           '<div>' +
             '<div class="label">' + escapeHtml(signal.data_label) + '</div>' +
             '<div class="signal-title">' + escapeHtml(signal.name) + '</div>' +
-            '<div class="signal-device">Device: ' + escapeHtml(signal.device_name) + '</div>' +
+            '<div class="signal-device">Data from: ' +
+              escapeHtml((signal.data_sources || [signal.device_name]).join(" + ")) +
+            '</div>' +
           '</div>' +
           '<div class="row">' +
             '<span class="status-pill signal-status"><span id="dot_' + id + '" class="dot"></span>' +
               '<span id="status_' + id + '">Not connected</span></span>' +
-            '<button id="audio_' + id + '" disabled>Audio off</button>' +
+            '<button id="audio_' + id + '" disabled>Audio on</button>' +
           '</div>' +
         '</div>' +
         '<div class="signal-body">' +
@@ -2323,7 +2373,7 @@ function updateSignalPanels(signals) {
     audioButton.disabled = !live;
     const state = ensureSignalState(signal);
     if (!live && state.audioOn) stopAudio(signal.id);
-    audioButton.textContent = state.audioOn ? "Audio on" : "Audio off";
+    audioButton.textContent = state.audioOn ? "Audio off" : "Audio on";
     audioButton.className = state.audioOn ? "audio-on" : "";
 
     document.getElementById("count_" + id).textContent =
