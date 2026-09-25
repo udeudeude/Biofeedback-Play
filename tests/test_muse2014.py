@@ -39,6 +39,13 @@ class Muse2014Tests(unittest.TestCase):
             "Muse-A620",
         )
 
+    def test_mac_serial_candidates_prefer_tty_sibling(self):
+        candidates = Muse2014SerialClient._mac_serial_candidates(
+            "/dev/cu.Muse-A620"
+        )
+        self.assertEqual(candidates[0], "/dev/tty.Muse-A620")
+        self.assertIn("/dev/cu.Muse-A620", candidates)
+
     def test_battery_packet(self):
         packet = bytes([0xB0]) + struct.pack(">HHHH", 8750, 3900, 3880, 27)
         decoded = decode_battery_packet(packet)
