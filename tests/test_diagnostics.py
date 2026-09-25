@@ -92,6 +92,17 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("biofeedbackPlay.panelOrder.v1", HTML)
         self.assertIn("Reset panel order", HTML)
 
+    def test_camera_signals_and_lab_exist(self):
+        self.assertIn("camera.ppg_raw", SIGNAL_DEFINITIONS)
+        self.assertIn("camera.motion_raw", SIGNAL_DEFINITIONS)
+        self.assertIn("camera.heart_rate", SIGNAL_DEFINITIONS)
+        self.assertIn("camera.coherence_ratio", SIGNAL_DEFINITIONS)
+        self.assertIn("comparison.lightstone_camera.beat_offset", SIGNAL_DEFINITIONS)
+        self.assertIn("cameraSourceCanvas", HTML)
+        self.assertIn("cameraMagnifiedCanvas", HTML)
+        self.assertIn("No video is uploaded", HTML)
+        self.assertIn('action: action', HTML)
+
 
 if __name__ == "__main__":
     unittest.main()
