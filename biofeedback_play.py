@@ -1044,6 +1044,10 @@ class BiofeedbackState:
         self.muse_version = ""
         self.muse_status_text = ""
         self.muse_stage = "Waiting for serial port"
+        self.muse_attempt_state = "idle"
+        self.muse_stage_started_monotonic = time.monotonic()
+        self.muse_retry_at_monotonic = 0.0
+        self.muse_attempt_number = 0
         self.muse_transport = ""
         self.muse_rfcomm_services = ""
         self.muse_rfcomm_channel = None
@@ -1091,8 +1095,18 @@ class BiofeedbackState:
     def set_muse_running(self, value: bool) -> None:
         with self.lock:
             self.muse_running = bool(value)
-            if not self.muse_running:
+            if self.muse_running:
+                self.muse_attempt_state = "working"
+                self.muse_last_error = ""
+                self.muse_retry_at_monotonic = 0.0
+                self.muse_attempt_number += 1
+                self.muse_stage = "Starting Muse connection attempt"
+                self.muse_stage_started_monotonic = time.monotonic()
+            else:
                 self.muse_connected = False
+                self.muse_attempt_state = "stopped"
+                self.muse_stage = "Acquisition stopped"
+                self.muse_stage_started_monotonic = time.monotonic()
 
     def set_muse_port(self, port: str) -> None:
         with self.lock:
@@ -1219,6 +1233,15 @@ class BiofeedbackState:
                 "muse_version": self.muse_version,
                 "muse_status_text": self.muse_status_text,
                 "muse_stage": self.muse_stage,
+                "muse_attempt_state": self.muse_attempt_state,
+                "muse_stage_elapsed_s": max(
+                    0.0, time.monotonic() - self.muse_stage_started_monotonic
+                ),
+                "muse_retry_seconds": max(
+                    0,
+                    int(self.muse_retry_at_monotonic - time.monotonic() + 0.999),
+                ) if self.muse_retry_at_monotonic else 0,
+                "muse_attempt_number": self.muse_attempt_number,
                 "muse_transport": self.muse_transport,
                 "muse_rfcomm_services": self.muse_rfcomm_services,
                 "muse_rfcomm_channel": self.muse_rfcomm_channel,
@@ -1275,6 +1298,15 @@ class BiofeedbackState:
                     "version": self.muse_version,
                     "status_text": self.muse_status_text,
                     "stage": self.muse_stage,
+                    "attempt_state": self.muse_attempt_state,
+                    "stage_elapsed_s": max(
+                        0.0, time.monotonic() - self.muse_stage_started_monotonic
+                    ),
+                    "retry_seconds": max(
+                        0,
+                        int(self.muse_retry_at_monotonic - time.monotonic() + 0.999),
+                    ) if self.muse_retry_at_monotonic else 0,
+                    "attempt_number": self.muse_attempt_number,
                     "connection_transport": self.muse_transport,
                     "rfcomm_services": self.muse_rfcomm_services,
                     "rfcomm_channel": self.muse_rfcomm_channel,
@@ -1815,9 +1847,14 @@ class BiofeedbackState:
 
     def _store_muse_status(self, status) -> None:
         with self.lock:
+            if status.stage != self.muse_stage:
+                self.muse_stage_started_monotonic = time.monotonic()
             self.muse_version = status.version
             self.muse_status_text = status.status_text
             self.muse_stage = status.stage
+            self.muse_attempt_state = "working"
+            self.muse_last_error = ""
+            self.muse_retry_at_monotonic = 0.0
             self.muse_transport = status.transport
             self.muse_rfcomm_services = status.rfcomm_services
             self.muse_rfcomm_channel = status.rfcomm_channel
@@ -2026,11 +2063,24 @@ class BiofeedbackState:
             if not should_run or not port:
                 with self.lock:
                     self.muse_connected = False
-                    self.muse_stage = (
+                    wanted_stage = (
                         "Acquisition stopped" if not should_run else "Waiting for serial port"
                     )
+                    if wanted_stage != self.muse_stage:
+                        self.muse_stage_started_monotonic = time.monotonic()
+                    self.muse_stage = wanted_stage
+                    self.muse_attempt_state = "stopped" if not should_run else "idle"
+                    self.muse_retry_at_monotonic = 0.0
                 time.sleep(0.5)
                 continue
+
+            with self.lock:
+                self.muse_attempt_number += 1
+                self.muse_attempt_state = "working"
+                self.muse_last_error = ""
+                self.muse_retry_at_monotonic = 0.0
+                self.muse_stage = "Starting Muse connection attempt"
+                self.muse_stage_started_monotonic = time.monotonic()
 
             client = Muse2014SerialClient(
                 port=port,
@@ -2061,9 +2111,22 @@ class BiofeedbackState:
                 with self.lock:
                     self.muse_connected = False
                     self.muse_last_error = str(exc)
-                    if not self.muse_stage:
-                        self.muse_stage = "Muse connection failed"
-                time.sleep(1.0)
+                    self.muse_attempt_state = "failed"
+                    self.muse_stage = "Attempt finished: connection failed"
+                    self.muse_stage_started_monotonic = time.monotonic()
+                    self.muse_retry_at_monotonic = time.monotonic() + 12.0
+
+                # Hold the completed result on screen long enough that the user
+                # can read it or take a screenshot before an automatic retry.
+                while not self.shutdown:
+                    with self.lock:
+                        if (
+                            not self.muse_running
+                            or self.muse_port != port
+                            or time.monotonic() >= self.muse_retry_at_monotonic
+                        ):
+                            break
+                    time.sleep(0.25)
             finally:
                 client.close()
                 with self.lock:
