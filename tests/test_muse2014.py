@@ -2,6 +2,7 @@ import struct
 import unittest
 
 from devices.muse2014 import (
+    Muse2014SerialClient,
     MusePacketParser,
     decode_accelerometer_packet,
     decode_battery_packet,
@@ -31,6 +32,12 @@ class Muse2014Tests(unittest.TestCase):
         word = enc(x) | (enc(y) << 10) | (enc(z) << 20)
         packet = bytes([0xA0]) + word.to_bytes(4, "little")
         self.assertEqual(decode_accelerometer_packet(packet), (x, y, z))
+
+    def test_muse_name_from_macos_port(self):
+        self.assertEqual(
+            Muse2014SerialClient._muse_name_from_port("/dev/cu.Muse-A620"),
+            "Muse-A620",
+        )
 
     def test_battery_packet(self):
         packet = bytes([0xB0]) + struct.pack(">HHHH", 8750, 3900, 3880, 27)
