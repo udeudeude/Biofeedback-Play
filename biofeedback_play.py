@@ -241,7 +241,7 @@ SIGNAL_DEFINITIONS = {
         ),
         "audio": "Pitch follows the camera-derived pulse waveform.",
         "osc": "/biofeedback/camera/ppg_raw",
-        "nominal_rate": 15.0,
+        "nominal_rate": 30.0,
         "value_key": "ppg",
     },
     "camera.motion_raw": {
@@ -256,7 +256,7 @@ SIGNAL_DEFINITIONS = {
         ),
         "audio": "Pitch follows recent camera motion intensity.",
         "osc": "/biofeedback/camera/motion_raw",
-        "nominal_rate": 15.0,
+        "nominal_rate": 30.0,
         "value_key": "motion",
     },
 }
@@ -2818,7 +2818,7 @@ function cameraPostPending(force) {
 function cameraAnalyzeFrame(timestamp) {
   if (!cameraStream) return;
   cameraAnimationFrame = requestAnimationFrame(cameraAnalyzeFrame);
-  if (timestamp - cameraLastFrameAt < 65) return;
+  if (timestamp - cameraLastFrameAt < 32) return;
   cameraLastFrameAt = timestamp;
 
   const video = document.getElementById("cameraVideo");
