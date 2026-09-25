@@ -240,11 +240,12 @@ SIGNAL_DEFINITIONS = {
         "device_id": "camera",
         "name": "Camera color pulse",
         "short_name": "Camera pulse",
-        "data_label": "Heartbeat-band facial color waveform",
-        "unit": "relative normalized-green units",
+        "data_label": "POS-style heartbeat-band facial color waveform",
+        "unit": "relative RGB pulse units",
         "description": (
-            "Locally extracted facial color waveform from guided forehead and lower-cheek regions, "
-            "temporal-band-pass filtered around 0.7–3 Hz to emphasize pulse-frequency changes. "
+            "Locally extracted facial color waveform from guided forehead and lower-cheek regions. "
+            "A POS-style combination of red, green, and blue changes suppresses common lighting variation, "
+            "then a 0.7–3 Hz temporal band-pass emphasizes pulse-frequency changes. "
             "It is experimental remote photoplethysmography, not a calibrated optical sensor."
         ),
         "audio": "Pitch follows the camera-derived pulse waveform.",
@@ -365,11 +366,30 @@ SIGNAL_DEFINITIONS.update(_pulse_derived_definitions(
 SIGNAL_DEFINITIONS.update(_pulse_derived_definitions(
     "emwave", "emWave ear clip", "/biofeedback/emwave"
 ))
-_camera_pulse_definitions = _pulse_derived_definitions(
-    "camera", "camera-derived facial color waveform", "/biofeedback/camera"
+SIGNAL_DEFINITIONS["camera.heart_rate"] = _derived_signal(
+    "camera",
+    "Heart rate",
+    "Spectral camera heart-rate estimate",
+    "beats/min",
+    (
+        "Conservative average heart-rate estimate from the dominant frequency of the recent "
+        "camera pulse waveform. It is withheld when camera signal quality is too low."
+    ),
+    "/biofeedback/camera/heart_rate",
+    "heart_rate_bpm",
+    precision=1,
+    audio="Pitch follows the accepted camera heart-rate estimate.",
 )
-for _signal_id in ("camera.heart_rate", "camera.pulse_amplitude"):
-    SIGNAL_DEFINITIONS[_signal_id] = _camera_pulse_definitions[_signal_id]
+SIGNAL_DEFINITIONS["camera.pulse_amplitude"] = _derived_signal(
+    "camera",
+    "Pulse amplitude",
+    "Recent camera pulse-waveform range",
+    "relative RGB pulse units",
+    "Robust recent 5th-to-95th percentile range of the camera pulse waveform. Useful while tuning lighting and face position.",
+    "/biofeedback/camera/pulse_amplitude",
+    "pulse_amplitude",
+    precision=2,
+)
 
 SIGNAL_DEFINITIONS["camera.signal_quality"] = _derived_signal(
     "camera",
