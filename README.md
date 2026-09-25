@@ -227,28 +227,25 @@ The **Camera lab** on the Use devices tab can:
 
 - request the Mac camera only after the user presses Start camera
 - keep video entirely in the local browser page
-- show a normal mirrored preview with forehead and cheek sampling guides
-- compute a normalized-green facial color waveform from those guided skin regions
-- compute a frame-to-frame motion waveform as an artifact / movement channel
-- show a second live view that magnifies only the approximate 0.7–3 Hz heartbeat band inside the guided skin regions
-- use lower-cheek sampling boxes that avoid the eye/glasses area better
-- show an experimental signal-quality estimate based on pulse-band strength and motion contamination
-- adjust the visual magnification from 0× to 40×
-- feed the camera pulse and motion signals into the same Biofeedback Play panel system
+- show a normal mirrored preview with forehead and lower-cheek sampling guides
+- reject very dark, clipped, and extreme-color pixels from those guided regions
+- combine recent red, green, and blue changes with a POS-style remote-PPG transform
+- band-pass that waveform around approximately 0.7–3 Hz
+- compute a frame-to-frame facial-motion waveform as an artifact channel
+- show a local periodicity-versus-motion quality estimate
+- optionally show heartbeat-band color magnification inside the guided skin regions
+- leave the expensive magnified view off by default to reduce browser CPU use
 
-The camera pulse stream receives the same exploratory pulse-derived panels as the hardware pulse sensors:
+For now the camera workspace is deliberately in **tuning mode**. It shows only the signals useful for deciding whether extraction is improving:
 
-- heart rate
-- inter-beat interval
-- HRV RMSSD
-- HRV SDNN
-- pNN50
-- coherence ratio
-- coherence peak share
-- breathing estimate
+- pulse waveform
+- facial motion
+- signal quality
 - pulse amplitude
-- beat-detection confidence
+- conservative spectral heart-rate estimate
 
-When Lightstone or any emWave is live at the same time, cross-device comparison panels are created automatically for heart-rate difference, nearest-beat timing offset, waveform correlation, and relative amplitude.
+Beat-to-beat interval, HRV, coherence, respiration, and related camera-derived panels are intentionally hidden until camera timing can be validated against a contact pulse sensor. Camera heart rate is currently estimated from the dominant recent pulse-wave frequency and is withheld when the quality score is too low, rather than always emitting a physiological-looking number.
 
-This is intentionally transparent and experimental. The current camera extractor uses guided facial regions, normalized green intensity, a simple temporal band-pass centered on approximately 0.7–3 Hz, and a separate motion measure rather than presenting proprietary “stress” or “peace” scores. The magnified view applies the heartbeat-band effect only inside the sampled forehead and lower-cheek regions. The quality percentage is a heuristic, not a medical confidence score.
+When Lightstone or any emWave is live at the same time, camera comparison panels become available only while the camera quality gate is satisfied. These comparisons are intended for validation of the camera pipeline before richer camera physiology is re-enabled.
+
+This is intentionally transparent and experimental. The quality percentage is a software signal-quality heuristic, not a medical confidence score.
