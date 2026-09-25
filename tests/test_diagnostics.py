@@ -101,6 +101,10 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("cameraSourceCanvas", HTML)
         self.assertIn("cameraMagnifiedCanvas", HTML)
         self.assertIn("No video is uploaded", HTML)
+        self.assertIn("cameraQualityValue", HTML)
+        self.assertIn("Heartbeat-band color magnification", HTML)
+        self.assertIn("0.7–3 Hz", HTML)
+        self.assertIn("cameraFilterAlpha", HTML)
         self.assertIn('action: action', HTML)
 
 
