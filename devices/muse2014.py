@@ -151,7 +151,8 @@ def list_muse_serial_ports() -> list[dict]:
 class MuseStatus:
     version: str = ""
     status_text: str = ""
-    afe_gain: float = DEFAULT_AFE_GAIN
+    afe_gain: float | None = None
+    stage: str = "Not started"
 
 
 class Muse2014SerialClient:
@@ -171,6 +172,11 @@ class Muse2014SerialClient:
         self.serial: serial.Serial | None = None
         self.parser = MusePacketParser()
         self.status = MuseStatus()
+
+    def _notify_status(self, stage: str) -> None:
+        self.status.stage = stage
+        if self.on_status:
+            self.on_status(self.status)
 
     def _write_command(self, command: str) -> None:
         if self.serial is None:
@@ -195,31 +201,62 @@ class Muse2014SerialClient:
     def open_and_configure(self) -> MuseStatus:
         # A baud rate is required by pyserial. For a macOS Bluetooth SPP virtual
         # serial device the RFCOMM transport, not this value, determines the link.
+        self._notify_status("Opening Bluetooth serial port")
         self.serial = serial.Serial(
             self.port,
             baudrate=115200,
             timeout=0.25,
             write_timeout=1.0,
         )
+
+        # Opening /dev/cu.Muse-* can return before the RFCOMM link to the physical
+        # headband has fully settled. Match the longer startup timing used by the
+        # clean-room RFCOMM implementation instead of sending commands immediately.
+        self._notify_status("Waiting for Bluetooth link")
+        time.sleep(1.0)
         self.serial.reset_input_buffer()
 
+        self._notify_status("Stopping any previous Muse stream")
         self._write_command("h")
-        time.sleep(0.25)
+        time.sleep(1.0)
+        self.serial.reset_input_buffer()
 
-        self._write_command("v 2")
-        self.status.version = self._read_text(0.8)
+        # The version command is our first proof that the physical headband is
+        # actually answering. Retry because an MU-01 that has just connected can
+        # miss the first command even though the macOS serial node opened cleanly.
+        version = ""
+        for attempt in range(1, 4):
+            self._notify_status(f"Version handshake {attempt}/3")
+            self._write_command("v 2")
+            version = self._read_text(1.2)
+            if version:
+                break
+            time.sleep(0.5)
 
-        # Interaxon's platform enum, as preserved in the clean-room implementation:
+        self.status.version = version
+        if not version:
+            self._notify_status("Serial port opened, but Muse did not answer")
+            raise RuntimeError(
+                "Opened the Muse serial port, but the headband did not answer the "
+                "version handshake. Keep the Muse unplugged from USB, powered on, "
+                "and paired, then restart acquisition."
+            )
+
+        self._notify_status("Muse answered version handshake")
+
+        # Interaxon's platform enum, as preserved in archived protocol material:
         # 1 iOS, 2 Android, 3 Windows, 4 Mac, 5 Linux.
         self._write_command("r 4")
-        time.sleep(0.15)
+        time.sleep(0.2)
 
         # Preset AD provides uncompressed 16-bit EEG plus accelerometer and battery.
+        self._notify_status("Loading raw EEG preset")
         self._write_command("% AD")
-        time.sleep(0.15)
+        time.sleep(0.2)
 
+        self._notify_status("Requesting Muse status")
         self._write_command("?")
-        self.status.status_text = self._read_text(1.5)
+        self.status.status_text = self._read_text(2.0)
         match = re.search(
             r"afe_gain:\s*([0-9]+(?:\.[0-9]+)?)",
             self.status.status_text,
@@ -228,11 +265,10 @@ class Muse2014SerialClient:
         if match:
             self.status.afe_gain = float(match.group(1))
 
-        if self.on_status:
-            self.on_status(self.status)
-
+        self._notify_status("Starting Muse stream")
         self._write_command("s")
-        time.sleep(0.25)
+        time.sleep(1.0)
+        self._notify_status("Waiting for Muse data")
         return self.status
 
     def run(self, should_stop: Callable[[], bool]) -> None:
@@ -255,7 +291,10 @@ class Muse2014SerialClient:
             for kind, packet in self.parser.feed(data):
                 if kind == "eeg":
                     self.on_eeg(
-                        decode_eeg_packet(packet, afe_gain=self.status.afe_gain)
+                        decode_eeg_packet(
+                            packet,
+                            afe_gain=self.status.afe_gain or DEFAULT_AFE_GAIN,
+                        )
                     )
                 elif kind == "accelerometer":
                     self.on_accelerometer(decode_accelerometer_packet(packet))
