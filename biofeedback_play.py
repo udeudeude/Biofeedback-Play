@@ -1045,6 +1045,8 @@ class BiofeedbackState:
         self.muse_status_text = ""
         self.muse_stage = "Waiting for serial port"
         self.muse_transport = ""
+        self.muse_rfcomm_services = ""
+        self.muse_rfcomm_channel = None
         self.muse_afe_gain = None
         self.muse_battery = None
         self.muse_last_data_monotonic = 0.0
@@ -1217,6 +1219,8 @@ class BiofeedbackState:
                 "muse_status_text": self.muse_status_text,
                 "muse_stage": self.muse_stage,
                 "muse_transport": self.muse_transport,
+                "muse_rfcomm_services": self.muse_rfcomm_services,
+                "muse_rfcomm_channel": self.muse_rfcomm_channel,
                 "muse_afe_gain": self.muse_afe_gain,
                 "muse_battery": self.muse_battery,
                 "muse_eeg_sample_count": self.muse_eeg_seq,
@@ -1270,6 +1274,8 @@ class BiofeedbackState:
                     "status_text": self.muse_status_text,
                     "stage": self.muse_stage,
                     "connection_transport": self.muse_transport,
+                    "rfcomm_services": self.muse_rfcomm_services,
+                    "rfcomm_channel": self.muse_rfcomm_channel,
                     "afe_gain": self.muse_afe_gain,
                     "battery": self.muse_battery,
                 },
@@ -1810,6 +1816,8 @@ class BiofeedbackState:
             self.muse_status_text = status.status_text
             self.muse_stage = status.stage
             self.muse_transport = status.transport
+            self.muse_rfcomm_services = status.rfcomm_services
+            self.muse_rfcomm_channel = status.rfcomm_channel
             self.muse_afe_gain = status.afe_gain
 
     def _store_emwave_packet(self, parsed: dict, unit_number: int = 1) -> None:
@@ -3537,6 +3545,8 @@ function renderDeviceSetup(devices) {
       const museStage = device.stage ? escapeHtml(device.stage) : "—";
       const museStatusText = device.status_text ? escapeHtml(device.status_text) : "—";
       const museTransport = device.connection_transport ? escapeHtml(device.connection_transport) : "—";
+      const museServices = device.rfcomm_services ? escapeHtml(device.rfcomm_services) : "—";
+      const museChannel = device.rfcomm_channel != null ? String(device.rfcomm_channel) : "—";
 
       const portSummary = musePorts.length
         ? musePorts.map(function(port) {
@@ -3567,6 +3577,8 @@ function renderDeviceSetup(devices) {
             '<div><strong>Selected port:</strong> <span class="mono">' + escapeHtml(currentPort || "none") + '</span></div>' +
             '<div><strong>Connection stage:</strong> ' + museStage + '</div>' +
             '<div><strong>Active transport:</strong> ' + museTransport + '</div>' +
+            '<div><strong>Advertised RFCOMM services:</strong> <span class="mono">' + museServices + '</span></div>' +
+            '<div><strong>Current RFCOMM channel:</strong> ' + museChannel + '</div>' +
             '<div><strong>Battery:</strong> ' + battery + '</div>' +
             '<div><strong>AFE gain:</strong> ' + afe + '</div>' +
             '<div><strong>Version:</strong> <span class="mono">' + version + '</span></div>' +
