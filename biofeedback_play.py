@@ -282,6 +282,7 @@ def _derived_signal(
     precision: int = 1,
     requires_devices: list[str] | None = None,
     source_name: str | None = None,
+    hide_when_inactive: bool = False,
 ) -> dict:
     return {
         "device_id": device_id,
@@ -298,6 +299,7 @@ def _derived_signal(
         "precision": precision,
         "requires_devices": requires_devices or [device_id],
         "source_name": source_name,
+        "hide_when_inactive": hide_when_inactive,
     }
 
 
