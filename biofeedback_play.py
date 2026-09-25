@@ -1005,6 +1005,13 @@ class BiofeedbackState:
         self.muse_thread = threading.Thread(target=self._muse_reader_loop, daemon=True)
         self.muse_thread.start()
 
+        self.camera_running = True
+        self.camera_connected = False
+        self.camera_last_data_monotonic = 0.0
+        self.camera_last_error = ""
+        self.camera_seq = 0
+        self.camera_samples = deque(maxlen=5000)
+
         self.derived_samples = {
             signal_id: deque(maxlen=900)
             for signal_id, definition in SIGNAL_DEFINITIONS.items()
@@ -1057,6 +1064,11 @@ class BiofeedbackState:
                     runtime["connected"] = False
         elif device_id == "muse":
             self.set_muse_running(value)
+        elif device_id == "camera":
+            with self.lock:
+                self.camera_running = bool(value)
+                if not self.camera_running:
+                    self.camera_connected = False
         else:
             raise ValueError(f"Unknown device: {device_id}")
 
@@ -1154,6 +1166,13 @@ class BiofeedbackState:
                 "muse_battery": self.muse_battery,
                 "muse_eeg_sample_count": self.muse_eeg_seq,
                 "muse_accel_sample_count": self.muse_accel_seq,
+                "camera_running": self.camera_running,
+                "camera_connected": (
+                    self.camera_connected
+                    and time.monotonic() - self.camera_last_data_monotonic < 2.5
+                ),
+                "camera_sample_count": self.camera_seq,
+                "camera_last_error": self.camera_last_error,
             }
 
     def device_catalog(self) -> list[dict]:
@@ -1195,6 +1214,15 @@ class BiofeedbackState:
                     "version": self.muse_version,
                     "afe_gain": self.muse_afe_gain,
                     "battery": self.muse_battery,
+                },
+                "camera": {
+                    "connected": (
+                        self.camera_connected
+                        and time.monotonic() - self.camera_last_data_monotonic < 2.5
+                    ),
+                    "running": self.camera_running,
+                    "error": self.camera_last_error,
+                    "sample_count": self.camera_seq,
                 },
             }
             for unit_number, runtime in self.emwave_extra_units.items():
@@ -1315,6 +1343,10 @@ class BiofeedbackState:
                     source = [
                         sample for sample in self.muse_accel_samples if sample["seq"] > seq
                     ][-800:]
+            elif definition["device_id"] == "camera":
+                source = [
+                    sample for sample in self.camera_samples if sample["seq"] > seq
+                ][-900:]
             else:
                 source = []
 
@@ -1326,6 +1358,79 @@ class BiofeedbackState:
                 }
                 for sample in source
             ]
+
+    def store_camera_samples(self, samples: list[dict]) -> None:
+        if not self.camera_running:
+            return
+        if not isinstance(samples, list) or not samples:
+            return
+
+        cleaned: list[tuple[float, float, float]] = []
+        for item in samples[-60:]:
+            if not isinstance(item, dict):
+                continue
+            try:
+                client_t = float(item.get("t"))
+                ppg = float(item.get("ppg"))
+                motion = float(item.get("motion"))
+            except (TypeError, ValueError):
+                continue
+            if not (math.isfinite(client_t) and math.isfinite(ppg) and math.isfinite(motion)):
+                continue
+            cleaned.append((client_t, ppg, motion))
+
+        if not cleaned:
+            return
+
+        cleaned.sort(key=lambda item: item[0])
+        newest_client_t = cleaned[-1][0]
+        now_mono = time.monotonic()
+        newest_elapsed = now_mono - self.started_monotonic
+        now_unix = time.time()
+
+        with self.lock:
+            self.camera_connected = True
+            self.camera_last_data_monotonic = now_mono
+            self.camera_last_error = ""
+
+            for client_t, ppg, motion in cleaned:
+                elapsed = newest_elapsed - max(0.0, newest_client_t - client_t)
+                self.camera_seq += 1
+                sample = {
+                    "seq": self.camera_seq,
+                    "t": elapsed,
+                    "ppg": ppg,
+                    "motion": motion,
+                }
+                self.camera_samples.append(sample)
+
+                if self.recording and self.recording_writer:
+                    sample_unix = now_unix - max(0.0, newest_elapsed - elapsed)
+                    self.recording_writer.writerow(
+                        [f"{sample_unix:.6f}", f"{elapsed:.6f}", "camera", "camera.ppg_raw", ppg]
+                    )
+                    self.recording_writer.writerow(
+                        [f"{sample_unix:.6f}", f"{elapsed:.6f}", "camera", "camera.motion_raw", motion]
+                    )
+
+                if self.osc_enabled:
+                    target = (self.osc_host, self.osc_port)
+                    try:
+                        self.osc_socket.sendto(
+                            osc_message("/biofeedback/camera/ppg_raw", ppg), target
+                        )
+                        self.osc_socket.sendto(
+                            osc_message("/biofeedback/camera/motion_raw", motion), target
+                        )
+                    except OSError as exc:
+                        self.camera_last_error = "OSC: " + str(exc)
+
+            if self.recording and self.recording_file:
+                self.recording_file.flush()
+
+    def set_camera_inactive(self) -> None:
+        with self.lock:
+            self.camera_connected = False
 
     def samples_after(self, seq: int) -> list[dict]:
         with self.lock:
