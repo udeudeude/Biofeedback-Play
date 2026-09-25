@@ -141,16 +141,17 @@ def list_muse_serial_ports() -> list[dict]:
             "likely_muse": likely,
         }
 
-    for device in glob.glob("/dev/cu.*"):
-        if device in found:
-            continue
-        likely = "muse" in device.lower()
-        found[device] = {
-            "device": device,
-            "description": "macOS serial port",
-            "hwid": "",
-            "likely_muse": likely,
-        }
+    for pattern in ("/dev/cu.*", "/dev/tty.*"):
+        for device in glob.glob(pattern):
+            if device in found:
+                continue
+            likely = "muse" in device.lower()
+            found[device] = {
+                "device": device,
+                "description": "macOS serial port",
+                "hwid": "",
+                "likely_muse": likely,
+            }
 
     return sorted(
         found.values(),
@@ -480,6 +481,7 @@ class Muse2014SerialClient:
         self.serial = None
         self.parser = MusePacketParser()
         self.status = MuseStatus()
+        self.command_terminator = b"\r"
 
     def _notify_status(self, stage: str) -> None:
         self.status.stage = stage
@@ -489,7 +491,7 @@ class Muse2014SerialClient:
     def _write_command(self, command: str) -> None:
         if self.serial is None:
             raise RuntimeError("Muse connection is not open")
-        self.serial.write((command + "\r\n").encode("ascii"))
+        self.serial.write(command.encode("ascii") + self.command_terminator)
         self.serial.flush()
 
     def _read_text(self, seconds: float) -> str:
@@ -514,17 +516,55 @@ class Muse2014SerialClient:
                 name = name[len(prefix) :]
         return name
 
-    def _open_virtual_serial_transport(self) -> None:
-        self.status.transport = "Virtual serial port"
-        self._notify_status("Opening Bluetooth serial port")
+    @staticmethod
+    def _mac_serial_candidates(port: str) -> list[str]:
+        """Return likely macOS Muse serial endpoints in useful order.
+
+        Historical MU-01 Mac setups used paths such as /dev/tty.Muse-RN-iAP
+        at 115200 baud. Modern macOS may present a differently named paired
+        Muse endpoint, so prefer tty endpoints but probe both tty and cu names.
+        """
+        candidates: list[str] = []
+
+        base = port.rsplit("/", 1)[-1]
+        if base.startswith("cu."):
+            sibling = "/dev/tty." + base[3:]
+            if sibling not in candidates:
+                candidates.append(sibling)
+        elif base.startswith("tty."):
+            if port not in candidates:
+                candidates.append(port)
+            sibling = "/dev/cu." + base[4:]
+            if sibling not in candidates:
+                candidates.append(sibling)
+
+        for pattern in ("/dev/tty.Muse*", "/dev/cu.Muse*"):
+            for candidate in sorted(glob.glob(pattern)):
+                if candidate not in candidates:
+                    candidates.append(candidate)
+
+        if port not in candidates:
+            candidates.append(port)
+
+        return candidates
+
+    def _open_virtual_serial_transport(self, port: str | None = None) -> None:
+        target = port or self.port
+        self.status.transport = f"macOS Bluetooth serial: {target}"
+        self._notify_status(f"Opening Bluetooth serial port {target}")
         self.serial = serial.Serial(
-            self.port,
+            target,
             baudrate=115200,
             timeout=0.25,
             write_timeout=1.0,
         )
 
-    def _version_handshake(self, attempts: int = 3) -> str:
+    def _version_handshake(
+        self,
+        attempts: int = 3,
+        terminator: bytes = b"\r",
+    ) -> str:
+        self.command_terminator = terminator
         # The RFCOMM channel can report open before the physical headset has
         # finished settling. Give it a moment before configuration commands.
         self._notify_status("Waiting for Bluetooth link")
@@ -544,6 +584,46 @@ class Muse2014SerialClient:
                 return version
             time.sleep(0.5)
         return ""
+
+    def _open_mac_serial_with_handshake(self) -> str:
+        """Try the serial endpoints used by historic Mac Muse workflows first."""
+        candidates = self._mac_serial_candidates(self.port)
+        tried: list[str] = []
+
+        for candidate in candidates:
+            if not glob.glob(candidate):
+                continue
+
+            for terminator, label in ((b"\r", "CR"), (b"\r\n", "CRLF")):
+                tried.append(f"{candidate} ({label})")
+                self.status.transport = f"macOS Bluetooth serial: {candidate}"
+                self._notify_status(
+                    f"Trying legacy Muse serial path {candidate} ({label})"
+                )
+
+                try:
+                    self._open_virtual_serial_transport(candidate)
+                    version = self._version_handshake(
+                        attempts=2,
+                        terminator=terminator,
+                    )
+                    if version:
+                        return version
+                except Exception:
+                    pass
+
+                if self.serial is not None:
+                    try:
+                        self.serial.close()
+                    except Exception:
+                        pass
+                    self.serial = None
+                time.sleep(0.3)
+
+        raise RuntimeError(
+            "No macOS Muse serial endpoint answered the version handshake. "
+            "Tried: " + ", ".join(tried)
+        )
 
     def _open_native_mac_with_handshake(self) -> str:
         muse_name = self._muse_name_from_port(self.port)
@@ -596,11 +676,27 @@ class Muse2014SerialClient:
         )
 
     def open_and_configure(self) -> MuseStatus:
-        if sys.platform == "darwin" and HAVE_NATIVE_MAC_BLUETOOTH:
-            version = self._open_native_mac_with_handshake()
+        if sys.platform == "darwin":
+            serial_error = ""
+            try:
+                version = self._open_mac_serial_with_handshake()
+            except Exception as exc:
+                serial_error = str(exc)
+                version = ""
+
+            if not version and HAVE_NATIVE_MAC_BLUETOOTH:
+                self._notify_status(
+                    "Legacy Mac serial path did not answer; trying raw RFCOMM"
+                )
+                try:
+                    version = self._open_native_mac_with_handshake()
+                except Exception as exc:
+                    raise RuntimeError(
+                        serial_error + " | Native RFCOMM fallback: " + str(exc)
+                    ) from exc
         else:
             self._open_virtual_serial_transport()
-            version = self._version_handshake(attempts=3)
+            version = self._version_handshake(attempts=3, terminator=b"\r\n")
 
         self.status.version = version
         if not version:
