@@ -1044,6 +1044,7 @@ class BiofeedbackState:
         self.muse_version = ""
         self.muse_status_text = ""
         self.muse_stage = "Waiting for serial port"
+        self.muse_transport = ""
         self.muse_afe_gain = None
         self.muse_battery = None
         self.muse_last_data_monotonic = 0.0
@@ -1215,6 +1216,7 @@ class BiofeedbackState:
                 "muse_version": self.muse_version,
                 "muse_status_text": self.muse_status_text,
                 "muse_stage": self.muse_stage,
+                "muse_transport": self.muse_transport,
                 "muse_afe_gain": self.muse_afe_gain,
                 "muse_battery": self.muse_battery,
                 "muse_eeg_sample_count": self.muse_eeg_seq,
@@ -1267,6 +1269,7 @@ class BiofeedbackState:
                     "version": self.muse_version,
                     "status_text": self.muse_status_text,
                     "stage": self.muse_stage,
+                    "connection_transport": self.muse_transport,
                     "afe_gain": self.muse_afe_gain,
                     "battery": self.muse_battery,
                 },
@@ -1806,6 +1809,7 @@ class BiofeedbackState:
             self.muse_version = status.version
             self.muse_status_text = status.status_text
             self.muse_stage = status.stage
+            self.muse_transport = status.transport
             self.muse_afe_gain = status.afe_gain
 
     def _store_emwave_packet(self, parsed: dict, unit_number: int = 1) -> None:
@@ -3532,6 +3536,7 @@ function renderDeviceSetup(devices) {
       const version = device.version ? escapeHtml(device.version) : "—";
       const museStage = device.stage ? escapeHtml(device.stage) : "—";
       const museStatusText = device.status_text ? escapeHtml(device.status_text) : "—";
+      const museTransport = device.connection_transport ? escapeHtml(device.connection_transport) : "—";
 
       const portSummary = musePorts.length
         ? musePorts.map(function(port) {
@@ -3561,6 +3566,7 @@ function renderDeviceSetup(devices) {
             portSummary +
             '<div><strong>Selected port:</strong> <span class="mono">' + escapeHtml(currentPort || "none") + '</span></div>' +
             '<div><strong>Connection stage:</strong> ' + museStage + '</div>' +
+            '<div><strong>Active transport:</strong> ' + museTransport + '</div>' +
             '<div><strong>Battery:</strong> ' + battery + '</div>' +
             '<div><strong>AFE gain:</strong> ' + afe + '</div>' +
             '<div><strong>Version:</strong> <span class="mono">' + version + '</span></div>' +
