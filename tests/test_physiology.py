@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from physiology import eeg_metrics, motion_metrics, pair_metrics, pulse_metrics, skin_metrics
+from physiology import camera_pulse_metrics, eeg_metrics, motion_metrics, pair_metrics, pulse_metrics, skin_metrics
 
 
 class PhysiologyTests(unittest.TestCase):
@@ -18,6 +18,39 @@ class PhysiologyTests(unittest.TestCase):
         self.assertAlmostEqual(metrics["heart_rate_bpm"], 60.0, delta=3.0)
         self.assertIsNotNone(metrics["rmssd_ms"])
         self.assertIsNotNone(metrics["coherence_peak_percent"])
+
+    def test_camera_pulse_metrics_estimates_clean_spectral_rate(self):
+        rate = 30.0
+        points = []
+        motion = []
+        for i in range(int(rate * 12)):
+            t = i / rate
+            value = 1.5 * math.sin(2 * math.pi * 1.2 * t)
+            points.append((t, value))
+            motion.append((t, 0.08))
+
+        metrics = camera_pulse_metrics(points, motion)
+        self.assertIsNotNone(metrics["heart_rate_bpm"])
+        self.assertAlmostEqual(metrics["heart_rate_bpm"], 72.0, delta=2.0)
+        self.assertGreater(metrics["signal_quality_percent"], 35.0)
+
+    def test_camera_pulse_metrics_refuses_high_motion_signal(self):
+        rate = 30.0
+        points = []
+        motion = []
+        for i in range(int(rate * 12)):
+            t = i / rate
+            value = (
+                math.sin(2 * math.pi * 1.2 * t)
+                + 0.9 * math.sin(2 * math.pi * 1.9 * t)
+                + 0.7 * math.sin(2 * math.pi * 2.6 * t)
+            )
+            points.append((t, value))
+            motion.append((t, 2.0))
+
+        metrics = camera_pulse_metrics(points, motion)
+        self.assertLess(metrics["signal_quality_percent"], 35.0)
+        self.assertIsNone(metrics["heart_rate_bpm"])
 
     def test_skin_metrics_exposes_tonic_and_slope(self):
         points = [(i * 0.1, 100.0 + i * 0.02) for i in range(700)]
