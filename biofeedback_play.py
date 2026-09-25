@@ -1527,10 +1527,16 @@ class BiofeedbackState:
                     and self.muse_running
                     and time.monotonic() - self.muse_last_data_monotonic < 3.0
                 )
+                camera_connected = (
+                    self.camera_connected
+                    and self.camera_running
+                    and time.monotonic() - self.camera_last_data_monotonic < 2.5
+                )
                 light = list(self.samples)
                 primary_emwave = list(self.emwave_samples)
                 muse_eeg = list(self.muse_eeg_samples)
                 muse_accel = list(self.muse_accel_samples)
+                camera_samples = list(self.camera_samples)
                 extra_snapshots = {
                     unit_number: {
                         "connected": runtime["connected"] and runtime["running"],
@@ -1571,6 +1577,13 @@ class BiofeedbackState:
                 for key, signal_id in pulse_signal_map(device_id).items():
                     self._store_derived(signal_id, metrics.get(key), elapsed)
 
+            if camera_connected:
+                camera_points = [(s["t"], s["ppg"]) for s in camera_samples]
+                pulse_points["camera"] = camera_points
+                metrics = pulse_metrics(camera_points)
+                for key, signal_id in pulse_signal_map("camera").items():
+                    self._store_derived(signal_id, metrics.get(key), elapsed)
+
             def publish_pair(first_id: str, second_id: str, pair_key: str) -> None:
                 if first_id not in pulse_points or second_id not in pulse_points:
                     return
@@ -1593,6 +1606,14 @@ class BiofeedbackState:
                     "lightstone",
                     emwave_device_id(unit_number),
                     f"lightstone_emwave{unit_number}",
+                )
+
+            publish_pair("lightstone", "camera", "lightstone_camera")
+            for unit_number in range(1, 5):
+                publish_pair(
+                    emwave_device_id(unit_number),
+                    "camera",
+                    f"emwave{unit_number}_camera",
                 )
 
             connected_emwaves = [
@@ -3579,6 +3600,10 @@ class Handler(BaseHTTPRequestHandler):
                 STATE.set_muse_port(str(payload.get("port") or ""))
             elif action == "open_bluetooth_settings":
                 STATE.open_bluetooth_settings()
+            elif action == "camera_samples":
+                STATE.store_camera_samples(payload.get("samples") or [])
+            elif action == "camera_stop":
+                STATE.set_camera_inactive()
             elif action == "diag_test":
                 result = test_hid_device(str(payload.get("path") or ""))
                 self.send_json({"ok": True, "result": result})
