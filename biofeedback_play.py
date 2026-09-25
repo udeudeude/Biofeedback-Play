@@ -2114,19 +2114,11 @@ class BiofeedbackState:
                     self.muse_attempt_state = "failed"
                     self.muse_stage = "Attempt finished: connection failed"
                     self.muse_stage_started_monotonic = time.monotonic()
-                    self.muse_retry_at_monotonic = time.monotonic() + 12.0
-
-                # Hold the completed result on screen long enough that the user
-                # can read it or take a screenshot before an automatic retry.
-                while not self.shutdown:
-                    with self.lock:
-                        if (
-                            not self.muse_running
-                            or self.muse_port != port
-                            or time.monotonic() >= self.muse_retry_at_monotonic
-                        ):
-                            break
-                    time.sleep(0.25)
+                    self.muse_retry_at_monotonic = 0.0
+                    # A failed diagnostic pass should stop here. Repeating the
+                    # same Bluetooth probes indefinitely makes it impossible to
+                    # tell whether useful work is still happening.
+                    self.muse_running = False
             finally:
                 client.close()
                 with self.lock:
@@ -3654,9 +3646,7 @@ function renderDeviceSetup(devices) {
         museAttemptClass = "failed";
         museAttemptTitle = "Attempt finished — send a screenshot now";
         museAttemptDetail =
-          "This pass is complete. The result will stay here while Biofeedback Play waits " +
-          museRetry + " second" + (museRetry === 1 ? "" : "s") +
-          " before trying again automatically.";
+          "This diagnostic pass is complete and has stopped. Biofeedback Play will not retry until you click Start acquisition.";
       } else if (museAttemptState === "stopped") {
         museAttemptClass = "";
         museAttemptTitle = "Acquisition stopped";
