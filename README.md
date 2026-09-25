@@ -217,3 +217,36 @@ The interface opens at:
 Hardware-specific readers feed a shared device/signal model. Visualization, audio feedback, recording, OSC, diagnostics, and derived physiology consume those signals rather than being hard-coded to one device.
 
 Raw measurements remain visible beside derived quantities. Derived metrics are explicitly labeled where calibration, window length, or algorithmic assumptions limit interpretation.
+
+
+## Camera / remote pulse
+
+Biofeedback Play includes a local browser-camera experiment inspired by remote photoplethysmography and video color magnification.
+
+The **Camera lab** on the Use devices tab can:
+
+- request the Mac camera only after the user presses Start camera
+- keep video entirely in the local browser page
+- show a normal mirrored preview with forehead and cheek sampling guides
+- compute a normalized-green facial color waveform from those guided skin regions
+- compute a frame-to-frame motion waveform as an artifact / movement channel
+- show a second live view that exaggerates subtle green-channel color changes
+- adjust the visual magnification from 0× to 40×
+- feed the camera pulse and motion signals into the same Biofeedback Play panel system
+
+The camera pulse stream receives the same exploratory pulse-derived panels as the hardware pulse sensors:
+
+- heart rate
+- inter-beat interval
+- HRV RMSSD
+- HRV SDNN
+- pNN50
+- coherence ratio
+- coherence peak share
+- breathing estimate
+- pulse amplitude
+- beat-detection confidence
+
+When Lightstone or any emWave is live at the same time, cross-device comparison panels are created automatically for heart-rate difference, nearest-beat timing offset, waveform correlation, and relative amplitude.
+
+This is intentionally transparent and experimental. The current camera extractor uses guided facial regions, normalized green intensity, slow baseline removal, and a separate motion measure rather than presenting proprietary “stress” or “peace” scores. The color-magnified video also exaggerates lighting and movement artifacts, so it is a visualization aid rather than a medical image.
