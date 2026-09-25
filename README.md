@@ -230,7 +230,9 @@ The **Camera lab** on the Use devices tab can:
 - show a normal mirrored preview with forehead and cheek sampling guides
 - compute a normalized-green facial color waveform from those guided skin regions
 - compute a frame-to-frame motion waveform as an artifact / movement channel
-- show a second live view that exaggerates subtle green-channel color changes
+- show a second live view that magnifies only the approximate 0.7–3 Hz heartbeat band inside the guided skin regions
+- use lower-cheek sampling boxes that avoid the eye/glasses area better
+- show an experimental signal-quality estimate based on pulse-band strength and motion contamination
 - adjust the visual magnification from 0× to 40×
 - feed the camera pulse and motion signals into the same Biofeedback Play panel system
 
@@ -249,4 +251,4 @@ The camera pulse stream receives the same exploratory pulse-derived panels as th
 
 When Lightstone or any emWave is live at the same time, cross-device comparison panels are created automatically for heart-rate difference, nearest-beat timing offset, waveform correlation, and relative amplitude.
 
-This is intentionally transparent and experimental. The current camera extractor uses guided facial regions, normalized green intensity, slow baseline removal, and a separate motion measure rather than presenting proprietary “stress” or “peace” scores. The color-magnified video also exaggerates lighting and movement artifacts, so it is a visualization aid rather than a medical image.
+This is intentionally transparent and experimental. The current camera extractor uses guided facial regions, normalized green intensity, a simple temporal band-pass centered on approximately 0.7–3 Hz, and a separate motion measure rather than presenting proprietary “stress” or “peace” scores. The magnified view applies the heartbeat-band effect only inside the sampled forehead and lower-cheek regions. The quality percentage is a heuristic, not a medical confidence score.
