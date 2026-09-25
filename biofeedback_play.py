@@ -2317,6 +2317,57 @@ canvas {
   display: inline-block; border: 1px solid var(--line); border-radius: 999px;
   padding: 4px 8px; margin: 3px 4px 0 0; color: var(--muted); font-size: 11px;
 }
+.camera-lab {
+  grid-column: span 12;
+  overflow: hidden;
+}
+.camera-lab-grid {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) minmax(0,1fr);
+  gap: 12px;
+  margin-top: 12px;
+}
+.camera-view {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #090c12;
+}
+.camera-view canvas {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 4 / 3;
+  margin: 0;
+  border-radius: 0;
+  display: block;
+}
+.camera-view-label {
+  position: absolute;
+  left: 9px; top: 8px; z-index: 2;
+  padding: 4px 7px;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 999px;
+  background: rgba(7,9,13,.72);
+  color: #d9dfeb;
+  font-size: 11px;
+  backdrop-filter: blur(5px);
+}
+.camera-controls {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  margin-top: 12px;
+}
+.camera-controls input[type=range] { width: 180px; }
+.camera-note {
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(255,255,255,.025);
+}
+.camera-live-value { font-variant-numeric: tabular-nums; }
+#cameraVideo { display: none; }
+
 .signal-toolbar {
   grid-column: span 12; display: flex; align-items: center; justify-content: space-between;
   gap: 10px; flex-wrap: wrap; padding: 10px 12px;
@@ -2371,6 +2422,7 @@ canvas {
 }
 @media (max-width: 820px) {
   .signal-panel, .half, .device-card { grid-column: span 12; }
+  .camera-lab-grid { grid-template-columns: 1fr; }
   .third { grid-column: span 12; }
   .metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .signal-info { grid-template-columns: 1fr; }
@@ -2405,6 +2457,44 @@ canvas {
         <div class="row">
           <button id="recordBtn">Start recording</button>
           <button id="folderBtn">Show recordings</button>
+        </div>
+      </section>
+
+      <section id="cameraLab" class="card camera-lab">
+        <div class="row between">
+          <div>
+            <div class="label">Camera lab · local processing</div>
+            <h2 style="margin-top:5px">Make tiny facial color changes visible</h2>
+            <div class="small" style="margin-top:5px">
+              Align your face with the guide. Biofeedback Play samples forehead and cheek color locally, extracts an experimental pulse waveform, measures motion, and can exaggerate subtle color changes in real time. No video is uploaded.
+            </div>
+          </div>
+          <div class="row">
+            <span class="status-pill"><span id="cameraDot" class="dot"></span><span id="cameraStatus">Camera off</span></span>
+            <button id="cameraToggle" class="primary">Start camera</button>
+          </div>
+        </div>
+        <video id="cameraVideo" playsinline muted></video>
+        <div class="camera-lab-grid">
+          <div class="camera-view">
+            <div class="camera-view-label">Normal + sampling guides</div>
+            <canvas id="cameraSourceCanvas" width="320" height="240"></canvas>
+          </div>
+          <div class="camera-view">
+            <div class="camera-view-label">Color magnification</div>
+            <canvas id="cameraMagnifiedCanvas" width="320" height="240"></canvas>
+          </div>
+        </div>
+        <div class="camera-controls">
+          <label class="small">Magnification
+            <input id="cameraGain" type="range" min="0" max="40" step="1" value="12">
+            <strong id="cameraGainValue">12×</strong>
+          </label>
+          <span class="small">Camera pulse: <strong id="cameraPpgValue" class="camera-live-value">—</strong></span>
+          <span class="small">Motion: <strong id="cameraMotionValue" class="camera-live-value">—</strong></span>
+        </div>
+        <div class="camera-note small">
+          Best results: steady diffuse light, face mostly still, and skin visible in the forehead/cheek boxes. The magnified view intentionally exaggerates lighting changes and motion too, so the separate motion signal helps tell signal from artifact.
         </div>
       </section>
 
@@ -2521,6 +2611,14 @@ let audioContext = null;
 let signalFilter = "all";
 let panelOrder = loadPanelOrder();
 let draggedSignalId = null;
+let cameraStream = null;
+let cameraAnimationFrame = null;
+let cameraLastFrameAt = 0;
+let cameraSignalBaseline = null;
+let cameraBaselineGreen = null;
+let cameraPreviousFrame = null;
+let cameraPendingSamples = [];
+let cameraLastPostAt = 0;
 
 function loadPanelOrder() {
   try {
@@ -2548,7 +2646,8 @@ const DEVICE_COLORS = {
   emwave2: "#55a7d8",
   emwave3: "#b28be0",
   emwave4: "#df8292",
-  muse: "#7f9cf5"
+  muse: "#7f9cf5",
+  camera: "#f28b63"
 };
 
 function deviceColor(deviceId) {
@@ -2657,6 +2756,213 @@ function visibleSignals(signals) {
   return ordered.filter(function(signal) { return signalKind(signal) === signalFilter; });
 }
 
+
+function cameraRectangles(width, height) {
+  return [
+    {x: Math.round(width * .32), y: Math.round(height * .17), w: Math.round(width * .36), h: Math.round(height * .17)},
+    {x: Math.round(width * .18), y: Math.round(height * .43), w: Math.round(width * .22), h: Math.round(height * .20)},
+    {x: Math.round(width * .60), y: Math.round(height * .43), w: Math.round(width * .22), h: Math.round(height * .20)}
+  ];
+}
+
+function drawCameraGuides(ctx, width, height) {
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,.78)";
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([6, 5]);
+  cameraRectangles(width, height).forEach(function(rect) {
+    ctx.strokeRect(rect.x + .5, rect.y + .5, rect.w, rect.h);
+  });
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function updateCameraStatus(text, live) {
+  const dot = document.getElementById("cameraDot");
+  const label = document.getElementById("cameraStatus");
+  if (dot) dot.className = live ? "dot on" : "dot";
+  if (label) label.textContent = text;
+}
+
+function cameraStopLocal() {
+  if (cameraAnimationFrame) {
+    cancelAnimationFrame(cameraAnimationFrame);
+    cameraAnimationFrame = null;
+  }
+  if (cameraStream) {
+    cameraStream.getTracks().forEach(function(track) { track.stop(); });
+    cameraStream = null;
+  }
+  cameraPreviousFrame = null;
+  cameraBaselineGreen = null;
+  cameraSignalBaseline = null;
+  cameraPendingSamples = [];
+  document.getElementById("cameraToggle").textContent = "Start camera";
+  document.getElementById("cameraToggle").className = "primary";
+  updateCameraStatus("Camera off", false);
+  post("camera_stop").catch(function() {});
+}
+
+function cameraPostPending(force) {
+  const now = performance.now();
+  if (!cameraPendingSamples.length) return;
+  if (!force && now - cameraLastPostAt < 250) return;
+  const batch = cameraPendingSamples.splice(0, cameraPendingSamples.length);
+  cameraLastPostAt = now;
+  post("camera_samples", {samples: batch}).catch(function(err) {
+    updateCameraStatus("Camera data error", false);
+    document.getElementById("error").textContent = String(err);
+  });
+}
+
+function cameraAnalyzeFrame(timestamp) {
+  if (!cameraStream) return;
+  cameraAnimationFrame = requestAnimationFrame(cameraAnalyzeFrame);
+  if (timestamp - cameraLastFrameAt < 65) return;
+  cameraLastFrameAt = timestamp;
+
+  const video = document.getElementById("cameraVideo");
+  if (!video || video.readyState < 2) return;
+
+  const source = document.getElementById("cameraSourceCanvas");
+  const magnified = document.getElementById("cameraMagnifiedCanvas");
+  const sourceCtx = source.getContext("2d", {willReadFrequently: true});
+  const magCtx = magnified.getContext("2d");
+  const width = source.width;
+  const height = source.height;
+
+  sourceCtx.save();
+  sourceCtx.translate(width, 0);
+  sourceCtx.scale(-1, 1);
+  sourceCtx.drawImage(video, 0, 0, width, height);
+  sourceCtx.restore();
+
+  const image = sourceCtx.getImageData(0, 0, width, height);
+  const data = image.data;
+  const rects = cameraRectangles(width, height);
+
+  let sumR = 0;
+  let sumG = 0;
+  let sumB = 0;
+  let count = 0;
+  rects.forEach(function(rect) {
+    for (let y = rect.y; y < rect.y + rect.h; y += 2) {
+      for (let x = rect.x; x < rect.x + rect.w; x += 2) {
+        const index = (y * width + x) * 4;
+        sumR += data[index];
+        sumG += data[index + 1];
+        sumB += data[index + 2];
+        count += 1;
+      }
+    }
+  });
+
+  let ppg = 0;
+  if (count) {
+    const r = sumR / count;
+    const g = sumG / count;
+    const b = sumB / count;
+    const normalizedGreen = g / Math.max(1, r + g + b);
+    if (cameraSignalBaseline == null) cameraSignalBaseline = normalizedGreen;
+    cameraSignalBaseline += .025 * (normalizedGreen - cameraSignalBaseline);
+    ppg = (normalizedGreen - cameraSignalBaseline) * 10000;
+  }
+
+  let motionSum = 0;
+  let motionCount = 0;
+  if (cameraPreviousFrame && cameraPreviousFrame.length === data.length) {
+    const x0 = Math.round(width * .18);
+    const x1 = Math.round(width * .82);
+    const y0 = Math.round(height * .12);
+    const y1 = Math.round(height * .82);
+    for (let y = y0; y < y1; y += 4) {
+      for (let x = x0; x < x1; x += 4) {
+        const index = (y * width + x) * 4;
+        const nowLum = .2126 * data[index] + .7152 * data[index + 1] + .0722 * data[index + 2];
+        const oldLum = .2126 * cameraPreviousFrame[index] + .7152 * cameraPreviousFrame[index + 1] + .0722 * cameraPreviousFrame[index + 2];
+        motionSum += Math.abs(nowLum - oldLum);
+        motionCount += 1;
+      }
+    }
+  }
+  const motion = motionCount ? 100 * motionSum / motionCount / 255 : 0;
+  cameraPreviousFrame = new Uint8ClampedArray(data);
+
+  const gain = Number(document.getElementById("cameraGain").value || 0);
+  if (!cameraBaselineGreen || cameraBaselineGreen.length !== width * height) {
+    cameraBaselineGreen = new Float32Array(width * height);
+    for (let pixel = 0; pixel < width * height; pixel++) {
+      cameraBaselineGreen[pixel] = data[pixel * 4 + 1];
+    }
+  }
+
+  const output = new ImageData(new Uint8ClampedArray(data), width, height);
+  const out = output.data;
+  for (let pixel = 0; pixel < width * height; pixel++) {
+    const index = pixel * 4;
+    const currentG = data[index + 1];
+    let baseG = cameraBaselineGreen[pixel];
+    baseG += .035 * (currentG - baseG);
+    cameraBaselineGreen[pixel] = baseG;
+    const delta = currentG - baseG;
+    out[index] = Math.max(0, Math.min(255, data[index] + delta * gain * .15));
+    out[index + 1] = Math.max(0, Math.min(255, currentG + delta * gain));
+    out[index + 2] = Math.max(0, Math.min(255, data[index + 2] + delta * gain * .15));
+  }
+
+  magCtx.putImageData(output, 0, 0);
+  drawCameraGuides(sourceCtx, width, height);
+  drawCameraGuides(magCtx, width, height);
+
+  document.getElementById("cameraPpgValue").textContent = ppg.toFixed(2);
+  document.getElementById("cameraMotionValue").textContent = motion.toFixed(2) + "%";
+  cameraPendingSamples.push({
+    t: performance.now() / 1000,
+    ppg: ppg,
+    motion: motion
+  });
+  if (cameraPendingSamples.length > 30) {
+    cameraPendingSamples.splice(0, cameraPendingSamples.length - 30);
+  }
+  cameraPostPending(false);
+}
+
+async function cameraStartLocal() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    updateCameraStatus("Camera API unavailable", false);
+    return;
+  }
+
+  updateCameraStatus("Requesting camera…", false);
+  try {
+    cameraStream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: "user",
+        width: {ideal: 640},
+        height: {ideal: 480},
+        frameRate: {ideal: 30, max: 30}
+      },
+      audio: false
+    });
+    const video = document.getElementById("cameraVideo");
+    video.srcObject = cameraStream;
+    await video.play();
+    cameraPreviousFrame = null;
+    cameraBaselineGreen = null;
+    cameraSignalBaseline = null;
+    cameraPendingSamples = [];
+    cameraLastFrameAt = 0;
+    document.getElementById("cameraToggle").textContent = "Stop camera";
+    document.getElementById("cameraToggle").className = "";
+    updateCameraStatus("Camera live", true);
+    cameraAnimationFrame = requestAnimationFrame(cameraAnalyzeFrame);
+  } catch (err) {
+    cameraStream = null;
+    updateCameraStatus("Camera permission/device error", false);
+    document.getElementById("error").textContent = "Camera: " + String(err);
+  }
+}
+
 function post(action, extra) {
   const body = Object.assign({action: action}, extra || {});
   return fetch("/api/control", {
@@ -2705,6 +3011,15 @@ document.querySelectorAll("[data-signal-filter]").forEach(function(button) {
     requestAnimationFrame(drawAllSignals);
   };
 });
+
+document.getElementById("cameraToggle").onclick = function() {
+  if (cameraStream) cameraStopLocal();
+  else cameraStartLocal();
+};
+document.getElementById("cameraGain").oninput = function() {
+  document.getElementById("cameraGainValue").textContent =
+    String(document.getElementById("cameraGain").value) + "×";
+};
 
 document.getElementById("resetPanelOrder").onclick = function() {
   panelOrder = null;
@@ -2938,6 +3253,13 @@ function renderDeviceSetup(devices) {
       (derivedCount ? '<span class="badge">+' + derivedCount + ' derived panels</span>' : "");
 
     let deviceSpecific = "";
+    if (device.id === "camera") {
+      deviceSpecific =
+        '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">' +
+          '<div class="label">Camera control</div>' +
+          '<div class="small" style="margin-top:6px">Camera permission and start/stop controls live on the Use devices tab because browser camera access requires a user gesture. Video processing stays local in the page.</div>' +
+        '</div>';
+    }
     if (device.id === "emwave" || /^emwave[2-4]$/.test(device.id)) {
       deviceSpecific =
         '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">' +
@@ -3020,11 +3342,12 @@ function renderDeviceSetup(devices) {
         '</div>' +
         '<div class="device-signals">' + signals + '</div>' +
         deviceSpecific +
-        '<div style="margin-top:12px">' +
-          '<button data-device-toggle="' + escapeHtml(device.id) + '">' +
-            (device.running ? "Stop acquisition" : "Start acquisition") +
-          '</button>' +
-        '</div>' +
+        (device.browser_controlled ? '' :
+          '<div style="margin-top:12px">' +
+            '<button data-device-toggle="' + escapeHtml(device.id) + '">' +
+              (device.running ? "Stop acquisition" : "Start acquisition") +
+            '</button>' +
+          '</div>') +
       '</div>'
     );
   }).join("");
