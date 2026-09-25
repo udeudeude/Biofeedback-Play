@@ -249,3 +249,8 @@ Beat-to-beat interval, HRV, coherence, respiration, and related camera-derived p
 When Lightstone or any emWave is live at the same time, camera comparison panels are available for validation, but their calculations update only while the camera quality gate is satisfied. These comparisons are intended to validate the camera pipeline before richer camera physiology is re-enabled.
 
 This is intentionally transparent and experimental. The quality percentage is a software signal-quality heuristic, not a medical confidence score.
+
+
+### Muse macOS transport
+
+On macOS, Biofeedback Play uses Apple's native IOBluetooth framework for the MU-01 live RFCOMM session. The `/dev/cu.Muse-*` port remains useful for identifying the paired headband in Device setup, but data acquisition does not depend on that virtual serial node staying connected.
