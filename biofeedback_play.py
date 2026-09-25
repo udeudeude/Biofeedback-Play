@@ -2563,6 +2563,29 @@ canvas {
   border-bottom: 1px solid rgba(52,59,78,.6); padding: 8px 7px; vertical-align: top;
 }
 .device-table tr.selected { background: rgba(196,181,253,.09); }
+.muse-attempt {
+  margin-top: 10px;
+  padding: 11px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.muse-attempt.working {
+  background: rgba(139,124,246,.10);
+  border-color: rgba(139,124,246,.55);
+}
+.muse-attempt.failed {
+  background: rgba(255,107,107,.09);
+  border-color: rgba(255,107,107,.55);
+}
+.muse-attempt.live {
+  background: rgba(89,209,133,.09);
+  border-color: rgba(89,209,133,.55);
+}
+.muse-attempt-title { font-weight: 700; margin-bottom: 3px; }
+.muse-attempt-detail { color: var(--muted); }
+
 .diag-output {
   white-space: pre-wrap; word-break: break-word; margin: 12px 0 0;
   max-height: 340px; overflow: auto; padding: 12px;
@@ -3615,6 +3638,38 @@ function renderDeviceSetup(devices) {
       const museServices = device.rfcomm_services ? escapeHtml(device.rfcomm_services) : "—";
       const museChannel = device.rfcomm_channel != null ? String(device.rfcomm_channel) : "—";
       const musePassiveProbe = device.passive_probe ? escapeHtml(device.passive_probe) : "—";
+      const museAttemptState = device.attempt_state || "idle";
+      const museElapsed = Math.max(0, Math.round(Number(device.stage_elapsed_s || 0)));
+      const museRetry = Math.max(0, Number(device.retry_seconds || 0));
+      let museAttemptClass = "working";
+      let museAttemptTitle = "Working…";
+      let museAttemptDetail =
+        "Biofeedback Play is still testing the Muse. You do not need to send a screenshot yet.";
+
+      if (device.connected) {
+        museAttemptClass = "live";
+        museAttemptTitle = "Connected";
+        museAttemptDetail = "Muse data is arriving. No troubleshooting screenshot is needed.";
+      } else if (museAttemptState === "failed") {
+        museAttemptClass = "failed";
+        museAttemptTitle = "Attempt finished — send a screenshot now";
+        museAttemptDetail =
+          "This pass is complete. The result will stay here while Biofeedback Play waits " +
+          museRetry + " second" + (museRetry === 1 ? "" : "s") +
+          " before trying again automatically.";
+      } else if (museAttemptState === "stopped") {
+        museAttemptClass = "";
+        museAttemptTitle = "Acquisition stopped";
+        museAttemptDetail = "Click Start acquisition when you want Biofeedback Play to try again.";
+      } else if (museAttemptState === "idle") {
+        museAttemptClass = "";
+        museAttemptTitle = "Waiting";
+        museAttemptDetail = "Biofeedback Play is waiting for the selected Muse serial port.";
+      } else {
+        museAttemptDetail =
+          "Still working on this connection attempt · current step has been running for " +
+          museElapsed + " second" + (museElapsed === 1 ? "" : "s") + ".";
+      }
 
       const portSummary = musePorts.length
         ? musePorts.map(function(port) {
@@ -3635,6 +3690,10 @@ function renderDeviceSetup(devices) {
             '<button id="museSavePort">Use selected port</button>' +
             '<button id="museScanPorts">Scan serial ports</button>' +
             '<button id="museBluetoothSettings">Open Bluetooth settings</button>' +
+          '</div>' +
+          '<div class="muse-attempt ' + museAttemptClass + '">' +
+            '<div class="muse-attempt-title">' + escapeHtml(museAttemptTitle) + '</div>' +
+            '<div class="muse-attempt-detail">' + escapeHtml(museAttemptDetail) + '</div>' +
           '</div>' +
           '<div id="musePortScanStatus" class="small" style="margin-top:10px;padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:#0d1017">' +
             escapeHtml(musePortScanStatus) +
