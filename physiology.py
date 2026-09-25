@@ -263,6 +263,89 @@ def pulse_metrics(points: Iterable[tuple[float, float]]) -> dict[str, float | No
     return result
 
 
+def camera_pulse_metrics(
+    points: Iterable[tuple[float, float]],
+    motion_points: Iterable[tuple[float, float]] | None = None,
+) -> dict[str, float | None]:
+    """Conservative camera pulse summary for tuning remote PPG.
+
+    Camera pulse timing is currently treated as a frequency-estimation problem,
+    not a beat-to-beat interval source.  That avoids manufacturing HRV from
+    unstable camera peaks before the camera pipeline has been validated against
+    a contact sensor.
+    """
+    data = _window(points, 12.0)
+    result: dict[str, float | None] = {
+        "heart_rate_bpm": None,
+        "pulse_amplitude": None,
+        "signal_quality_percent": None,
+    }
+    if len(data) < 8:
+        return result
+
+    recent_values = [v for _, v in data]
+    result["pulse_amplitude"] = (
+        _percentile(recent_values, 0.95) - _percentile(recent_values, 0.05)
+    )
+
+    duration = data[-1][0] - data[0][0]
+    if duration < 6.0:
+        return result
+
+    times = [t for t, _ in data]
+    values = [v for _, v in data]
+    _, signal = _interpolate(times, values, 30.0)
+    if len(signal) < 150:
+        return result
+    signal = signal[-360:]
+
+    frequencies = [round(0.70 + i * 0.02, 3) for i in range(116)]
+    power = _spectrum(signal, 30.0, frequencies)
+    if not power:
+        return result
+
+    peak_frequency = max(power, key=power.get)
+    peak_bin_power = power[peak_frequency]
+
+    # Camera waveforms can emphasize the second harmonic. Prefer a plausible
+    # half-frequency when it carries substantial power of its own.
+    if peak_frequency >= 1.50:
+        half = peak_frequency / 2.0
+        half_frequency = min(frequencies, key=lambda f: abs(f - half))
+        if power.get(half_frequency, 0.0) >= 0.45 * peak_bin_power:
+            peak_frequency = half_frequency
+
+    total_power = sum(power.values())
+    peak_power = sum(
+        p for frequency, p in power.items()
+        if abs(frequency - peak_frequency) <= 0.12
+    )
+    if total_power <= 1e-12:
+        return result
+
+    concentration = max(0.0, min(1.0, peak_power / total_power))
+    spectral_score = max(0.0, min(1.0, (concentration - 0.10) / 0.55))
+
+    motion_score = 1.0
+    if motion_points is not None:
+        motion = _window(motion_points, 8.0)
+        if motion:
+            recent_motion = [max(0.0, value) for _, value in motion]
+            motion_level = statistics.median(recent_motion)
+            motion_score = 1.0 / (1.0 + (motion_level / 0.65) ** 2)
+
+    duration_score = max(0.0, min(1.0, (duration - 5.0) / 4.0))
+    quality = 100.0 * spectral_score * motion_score * duration_score
+    result["signal_quality_percent"] = quality
+
+    # Refuse to emit a physiological-looking number until the camera waveform
+    # has a reasonably concentrated rhythm and sufficiently little motion.
+    if quality >= 35.0:
+        result["heart_rate_bpm"] = peak_frequency * 60.0
+
+    return result
+
+
 def skin_metrics(points: Iterable[tuple[float, float]]) -> dict[str, float | None]:
     data = _window(points, 90.0)
     result: dict[str, float | None] = {
