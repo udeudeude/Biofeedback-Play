@@ -168,6 +168,8 @@ class MuseStatus:
     afe_gain: float | None = None
     stage: str = "Not started"
     transport: str = ""
+    rfcomm_services: str = ""
+    rfcomm_channel: int | None = None
 
 
 if HAVE_NATIVE_MAC_BLUETOOTH:
@@ -212,7 +214,12 @@ class NativeMacRFCOMM:
 
     SPP_UUID16 = 0x1101
 
-    def __init__(self, muse_name: str, timeout: float = 0.25) -> None:
+    def __init__(
+        self,
+        muse_name: str,
+        timeout: float = 0.25,
+        channel_id: int | None = None,
+    ) -> None:
         if not HAVE_NATIVE_MAC_BLUETOOTH:
             raise RuntimeError("Native macOS Bluetooth support is not installed")
 
@@ -220,6 +227,8 @@ class NativeMacRFCOMM:
         self.device = self._find_paired_device(muse_name)
         self.delegate = _RFCOMMDelegate.alloc().init()
         self.channel = None
+        self.channel_id = channel_id
+        self.service_name = ""
         self._open()
 
     @staticmethod
@@ -264,23 +273,96 @@ class NativeMacRFCOMM:
                 )
             _pump_mac_run_loop(1.0)
 
-    def _resolve_rfcomm_channel(self) -> int:
+    @staticmethod
+    def _service_records(device):
         try:
-            self.device.performSDPQuery_(None)
-            _pump_mac_run_loop(1.5)
-            uuid = IOBluetooth.IOBluetoothSDPUUID.uuid16_(self.SPP_UUID16)
-            record = self.device.getServiceRecordForUUID_(uuid)
-            if record is not None:
-                result = record.getRFCOMMChannelID_(None)
-                if isinstance(result, tuple) and len(result) == 2:
-                    status, channel_id = result
-                    if int(status) == 0:
-                        return int(channel_id)
+            device.performSDPQuery_(None)
+            _pump_mac_run_loop(2.0)
         except Exception:
             pass
 
-        # Muse 2014's serial service is normally RFCOMM channel 1.
-        return 1
+        for accessor in ("services", "getServices"):
+            try:
+                value = getattr(device, accessor)
+                records = value() if callable(value) else value
+                if records is not None:
+                    return list(records)
+            except Exception:
+                continue
+        return []
+
+    @classmethod
+    def discover_rfcomm_services(cls, muse_name: str) -> list[dict]:
+        """Return every SDP service on the paired Muse that exposes RFCOMM.
+
+        Historic muse-io connected by Bluetooth device name rather than a
+        pre-created tty. Enumerating every RFCOMM SDP record lets us reproduce
+        that behavior instead of assuming the generic Serial Port Profile
+        record is the right application channel.
+        """
+        if not HAVE_NATIVE_MAC_BLUETOOTH:
+            return [{"channel": 1, "name": "fallback"}]
+
+        device = cls._find_paired_device(muse_name)
+
+        try:
+            if not bool(device.isConnected()):
+                status = int(device.openConnection())
+                if status == 0:
+                    _pump_mac_run_loop(1.0)
+        except Exception:
+            pass
+
+        found: list[dict] = []
+        seen: set[int] = set()
+
+        for record in cls._service_records(device):
+            try:
+                result = record.getRFCOMMChannelID_(None)
+                if not (isinstance(result, tuple) and len(result) == 2):
+                    continue
+                status, channel_id = result
+                if int(status) != 0:
+                    continue
+                channel_id = int(channel_id)
+                if channel_id in seen:
+                    continue
+
+                try:
+                    service_name = str(record.getServiceName() or "")
+                except Exception:
+                    service_name = ""
+
+                seen.add(channel_id)
+                found.append(
+                    {
+                        "channel": channel_id,
+                        "name": service_name or "unnamed RFCOMM service",
+                    }
+                )
+            except Exception:
+                continue
+
+        # Prefer an explicitly named serial service, then unnamed channels,
+        # while preserving the actual channel IDs advertised by the headset.
+        found.sort(
+            key=lambda item: (
+                0 if "serial" in item["name"].lower() else 1,
+                item["channel"],
+            )
+        )
+
+        if 1 not in seen:
+            found.append({"channel": 1, "name": "channel 1 fallback"})
+
+        return found
+
+    def _resolve_rfcomm_channel(self) -> int:
+        if self.channel_id is not None:
+            return int(self.channel_id)
+
+        services = self.discover_rfcomm_services(str(self.device.name() or "Muse"))
+        return int(services[0]["channel"]) if services else 1
 
     def _open_once(self, channel_id: int):
         delegate = _RFCOMMDelegate.alloc().init()
@@ -303,6 +385,7 @@ class NativeMacRFCOMM:
         for reset in (False, True):
             self._ensure_baseband(reset=reset)
             channel_id = self._resolve_rfcomm_channel()
+            self.channel_id = channel_id
             status, channel, delegate = self._open_once(channel_id)
             last_status = status
             if status == 0 and channel is not None:
@@ -431,14 +514,7 @@ class Muse2014SerialClient:
                 name = name[len(prefix) :]
         return name
 
-    def _open_transport(self) -> None:
-        if sys.platform == "darwin" and HAVE_NATIVE_MAC_BLUETOOTH:
-            muse_name = self._muse_name_from_port(self.port)
-            self.status.transport = "Native macOS IOBluetooth RFCOMM"
-            self._notify_status("Opening native macOS Bluetooth RFCOMM")
-            self.serial = NativeMacRFCOMM(muse_name, timeout=0.25)
-            return
-
+    def _open_virtual_serial_transport(self) -> None:
         self.status.transport = "Virtual serial port"
         self._notify_status("Opening Bluetooth serial port")
         self.serial = serial.Serial(
@@ -448,9 +524,7 @@ class Muse2014SerialClient:
             write_timeout=1.0,
         )
 
-    def open_and_configure(self) -> MuseStatus:
-        self._open_transport()
-
+    def _version_handshake(self, attempts: int = 3) -> str:
         # The RFCOMM channel can report open before the physical headset has
         # finished settling. Give it a moment before configuration commands.
         self._notify_status("Waiting for Bluetooth link")
@@ -462,16 +536,71 @@ class Muse2014SerialClient:
         time.sleep(1.0)
         self.serial.reset_input_buffer()
 
-        # The version command is our first proof that the headband is actually
-        # answering, so retry it before declaring the link unusable.
-        version = ""
-        for attempt in range(1, 4):
-            self._notify_status(f"Version handshake {attempt}/3")
+        for attempt in range(1, attempts + 1):
+            self._notify_status(f"Version handshake {attempt}/{attempts}")
             self._write_command("v 2")
             version = self._read_text(1.2)
             if version:
-                break
+                return version
             time.sleep(0.5)
+        return ""
+
+    def _open_native_mac_with_handshake(self) -> str:
+        muse_name = self._muse_name_from_port(self.port)
+        self.status.transport = "Native macOS IOBluetooth RFCOMM"
+
+        services = NativeMacRFCOMM.discover_rfcomm_services(muse_name)
+        self.status.rfcomm_services = ", ".join(
+            f"{item['channel']} ({item['name']})" for item in services
+        )
+        self._notify_status(
+            f"Found {len(services)} RFCOMM candidate"
+            + ("" if len(services) == 1 else "s")
+        )
+
+        tried: list[str] = []
+        for item in services:
+            channel_id = int(item["channel"])
+            service_name = str(item["name"])
+            tried.append(f"{channel_id} ({service_name})")
+            self.status.rfcomm_channel = channel_id
+            self._notify_status(
+                f"Trying RFCOMM channel {channel_id}: {service_name}"
+            )
+
+            try:
+                self.serial = NativeMacRFCOMM(
+                    muse_name,
+                    timeout=0.25,
+                    channel_id=channel_id,
+                )
+                version = self._version_handshake(attempts=2)
+                if version:
+                    return version
+            except Exception:
+                pass
+
+            if self.serial is not None:
+                try:
+                    self.serial.close()
+                except Exception:
+                    pass
+                self.serial = None
+            time.sleep(0.4)
+
+        self.status.rfcomm_channel = None
+        self._notify_status("No advertised RFCOMM channel answered as Muse")
+        raise RuntimeError(
+            "The paired Muse advertises RFCOMM service(s), but none answered "
+            "the Muse version handshake. Tried: " + ", ".join(tried)
+        )
+
+    def open_and_configure(self) -> MuseStatus:
+        if sys.platform == "darwin" and HAVE_NATIVE_MAC_BLUETOOTH:
+            version = self._open_native_mac_with_handshake()
+        else:
+            self._open_virtual_serial_transport()
+            version = self._version_handshake(attempts=3)
 
         self.status.version = version
         if not version:
