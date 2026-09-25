@@ -27,7 +27,14 @@ from devices.muse2014 import (
     Muse2014SerialClient,
     list_muse_serial_ports,
 )
-from physiology import eeg_metrics, motion_metrics, pair_metrics, pulse_metrics, skin_metrics
+from physiology import (
+    camera_pulse_metrics,
+    eeg_metrics,
+    motion_metrics,
+    pair_metrics,
+    pulse_metrics,
+    skin_metrics,
+)
 
 
 VENDOR_ID = 0x14FA
@@ -356,9 +363,26 @@ SIGNAL_DEFINITIONS.update(_pulse_derived_definitions(
 SIGNAL_DEFINITIONS.update(_pulse_derived_definitions(
     "emwave", "emWave ear clip", "/biofeedback/emwave"
 ))
-SIGNAL_DEFINITIONS.update(_pulse_derived_definitions(
+_camera_pulse_definitions = _pulse_derived_definitions(
     "camera", "camera-derived facial color waveform", "/biofeedback/camera"
-))
+)
+for _signal_id in ("camera.heart_rate", "camera.pulse_amplitude"):
+    SIGNAL_DEFINITIONS[_signal_id] = _camera_pulse_definitions[_signal_id]
+
+SIGNAL_DEFINITIONS["camera.signal_quality"] = _derived_signal(
+    "camera",
+    "Camera signal quality",
+    "Periodic pulse-band strength after motion penalty",
+    "%",
+    (
+        "Conservative camera-only quality estimate based on how strongly the recent "
+        "waveform concentrates around one pulse-like frequency and how little facial "
+        "motion is present. Low quality suppresses camera heart-rate output."
+    ),
+    "/biofeedback/camera/signal_quality",
+    "signal_quality_percent",
+    precision=0,
+)
 
 SIGNAL_DEFINITIONS.update({
     "lightstone.skin_tonic": _derived_signal(
@@ -523,6 +547,8 @@ def _add_pair_signal_definitions(
         "requires_devices": [first_id, second_id],
         "source_name": source_name,
     }
+    if "camera" in {first_id, second_id}:
+        common["hide_when_inactive"] = True
     SIGNAL_DEFINITIONS[f"comparison.{pair_key}.hr_difference"] = _derived_signal(
         second_id,
         "Pulse-source HR difference",
@@ -1273,6 +1299,9 @@ class BiofeedbackState:
             connected = all(devices.get(req, {}).get("connected", False) for req in required)
             running = all(devices.get(req, {}).get("running", False) for req in required)
 
+            if definition.get("hide_when_inactive") and not (connected and running):
+                continue
+
             if definition["device_id"] == "muse":
                 if signal_id.startswith("muse.eeg.") or signal_id.startswith("muse.band.") or signal_id in {
                     "muse.alpha_asymmetry",
@@ -1501,6 +1530,12 @@ class BiofeedbackState:
                 "beat_confidence_percent": f"{device_id}.beat_confidence",
             }
 
+        camera_signal_map = {
+            "heart_rate_bpm": "camera.heart_rate",
+            "pulse_amplitude": "camera.pulse_amplitude",
+            "signal_quality_percent": "camera.signal_quality",
+        }
+
         skin_map = {
             "tonic_level": "lightstone.skin_tonic",
             "phasic_level": "lightstone.skin_phasic",
@@ -1580,10 +1615,14 @@ class BiofeedbackState:
 
             if camera_connected:
                 camera_points = [(s["t"], s["ppg"]) for s in camera_samples]
-                pulse_points["camera"] = camera_points
-                metrics = pulse_metrics(camera_points)
-                for key, signal_id in pulse_signal_map("camera").items():
+                camera_motion_points = [(s["t"], s["motion"]) for s in camera_samples]
+                metrics = camera_pulse_metrics(camera_points, camera_motion_points)
+                for key, signal_id in camera_signal_map.items():
                     self._store_derived(signal_id, metrics.get(key), elapsed)
+
+                camera_quality = metrics.get("signal_quality_percent")
+                if camera_quality is not None and camera_quality >= 35.0:
+                    pulse_points["camera"] = camera_points
 
             def publish_pair(first_id: str, second_id: str, pair_key: str) -> None:
                 if first_id not in pulse_points or second_id not in pulse_points:
@@ -2482,11 +2521,15 @@ canvas {
             <canvas id="cameraSourceCanvas" width="320" height="240"></canvas>
           </div>
           <div class="camera-view">
-            <div class="camera-view-label">Heartbeat-band color magnification</div>
+            <div class="camera-view-label">Heartbeat-band color magnification (optional)</div>
             <canvas id="cameraMagnifiedCanvas" width="320" height="240"></canvas>
           </div>
         </div>
         <div class="camera-controls">
+          <label class="small">
+            <input id="cameraMagnifyEnabled" type="checkbox">
+            Magnified view (extra CPU)
+          </label>
           <label class="small">Magnification
             <input id="cameraGain" type="range" min="0" max="40" step="1" value="12">
             <strong id="cameraGainValue">12×</strong>
@@ -2496,7 +2539,7 @@ canvas {
           <span class="small">Signal quality: <strong id="cameraQualityValue" class="camera-live-value">—</strong></span>
         </div>
         <div class="camera-note small">
-          Best results: steady diffuse light, face mostly still, and exposed skin inside the forehead and lower-cheek boxes. The magnified view now isolates approximately 0.7–3 Hz (about 42–180 beats/min) and applies the effect only inside those skin regions. Signal quality is an experimental heuristic based on pulse-band strength and motion contamination.
+          Tuning mode currently shows only the camera signals that help improve extraction: pulse waveform, motion, signal quality, pulse amplitude, and conservative spectral heart rate. HRV, coherence, respiration, and beat-to-beat camera panels are intentionally hidden until a contact sensor can validate timing. Best results: steady diffuse light, face mostly still, and exposed skin inside the forehead and lower-cheek boxes. The pulse extractor uses a POS-style RGB combination followed by an approximate 0.7–3 Hz band-pass. The optional magnified view costs substantially more CPU.
         </div>
       </section>
 
@@ -2625,6 +2668,7 @@ let cameraPendingSamples = [];
 let cameraLastPostAt = 0;
 let cameraLastSampleTimestamp = null;
 let cameraQualityHistory = [];
+let cameraRgbHistory = [];
 
 function loadPanelOrder() {
   try {
@@ -2775,6 +2819,47 @@ function cameraFilterAlpha(cutoffHz, dtSeconds) {
   return 1 - Math.exp(-2 * Math.PI * cutoffHz * dtSeconds);
 }
 
+function cameraStdDev(values) {
+  if (!values.length) return 0;
+  const mean = values.reduce(function(a, b) { return a + b; }, 0) / values.length;
+  const variance = values.reduce(function(total, value) {
+    const delta = value - mean;
+    return total + delta * delta;
+  }, 0) / values.length;
+  return Math.sqrt(Math.max(0, variance));
+}
+
+function cameraPosPulse(r, g, b) {
+  cameraRgbHistory.push({r: r, g: g, b: b});
+  if (cameraRgbHistory.length > 72) {
+    cameraRgbHistory.splice(0, cameraRgbHistory.length - 72);
+  }
+
+  const windowLength = Math.min(48, cameraRgbHistory.length);
+  if (windowLength < 24) return null;
+  const window = cameraRgbHistory.slice(cameraRgbHistory.length - windowLength);
+
+  const meanR = window.reduce(function(total, item) { return total + item.r; }, 0) / windowLength;
+  const meanG = window.reduce(function(total, item) { return total + item.g; }, 0) / windowLength;
+  const meanB = window.reduce(function(total, item) { return total + item.b; }, 0) / windowLength;
+  if (meanR <= 1 || meanG <= 1 || meanB <= 1) return null;
+
+  const xs = [];
+  const ys = [];
+  window.forEach(function(item) {
+    const rn = item.r / meanR - 1;
+    const gn = item.g / meanG - 1;
+    const bn = item.b / meanB - 1;
+    xs.push(gn - bn);
+    ys.push(gn + bn - 2 * rn);
+  });
+
+  const yStd = cameraStdDev(ys);
+  if (yStd < 1e-9) return null;
+  const alpha = cameraStdDev(xs) / yStd;
+  return xs[xs.length - 1] + alpha * ys[ys.length - 1];
+}
+
 function cameraInSamplingRegion(x, y, rects) {
   return rects.some(function(rect) {
     return x >= rect.x && x < rect.x + rect.w &&
@@ -2784,24 +2869,40 @@ function cameraInSamplingRegion(x, y, rects) {
 
 function cameraQualityScore(ppg, motion) {
   cameraQualityHistory.push({ppg: ppg, motion: motion});
-  if (cameraQualityHistory.length > 90) {
-    cameraQualityHistory.splice(0, cameraQualityHistory.length - 90);
+  if (cameraQualityHistory.length > 180) {
+    cameraQualityHistory.splice(0, cameraQualityHistory.length - 180);
   }
-  if (cameraQualityHistory.length < 20) return null;
+  if (cameraQualityHistory.length < 90) return null;
 
-  const pulseValues = cameraQualityHistory.map(function(item) { return item.ppg; });
-  const motionValues = cameraQualityHistory.map(function(item) { return item.motion; });
-  const pulseMean = pulseValues.reduce(function(a, b) { return a + b; }, 0) / pulseValues.length;
-  const pulseVariance = pulseValues.reduce(function(total, value) {
-    const delta = value - pulseMean;
-    return total + delta * delta;
-  }, 0) / pulseValues.length;
-  const pulseRms = Math.sqrt(Math.max(0, pulseVariance));
+  const values = cameraQualityHistory.map(function(item) { return item.ppg; });
+  const mean = values.reduce(function(a, b) { return a + b; }, 0) / values.length;
+  const centered = values.map(function(value) { return value - mean; });
+  const energy = centered.reduce(function(total, value) { return total + value * value; }, 0);
+  if (energy < 1e-8) return 0;
+
+  let bestCorrelation = 0;
+  for (let lag = 10; lag <= 43; lag++) {
+    let numerator = 0;
+    let leftEnergy = 0;
+    let rightEnergy = 0;
+    for (let i = lag; i < centered.length; i++) {
+      const left = centered[i];
+      const right = centered[i - lag];
+      numerator += left * right;
+      leftEnergy += left * left;
+      rightEnergy += right * right;
+    }
+    const denominator = Math.sqrt(leftEnergy * rightEnergy);
+    if (denominator > 0) {
+      bestCorrelation = Math.max(bestCorrelation, numerator / denominator);
+    }
+  }
+
+  const motionValues = cameraQualityHistory.map(function(item) { return Math.max(0, item.motion); });
   const motionMean = motionValues.reduce(function(a, b) { return a + b; }, 0) / motionValues.length;
-
-  const signalScore = 1 - Math.exp(-Math.max(0, pulseRms) / 0.45);
-  const motionScore = Math.max(0, Math.min(1, 1 - motionMean / 1.2));
-  return Math.round(100 * signalScore * motionScore);
+  const periodicityScore = Math.max(0, Math.min(1, (bestCorrelation - .12) / .68));
+  const motionScore = 1 / (1 + Math.pow(motionMean / .65, 2));
+  return Math.round(100 * periodicityScore * motionScore);
 }
 
 function cameraQualityLabel(score) {
@@ -2847,6 +2948,7 @@ function cameraStopLocal() {
   cameraPendingSamples = [];
   cameraLastSampleTimestamp = null;
   cameraQualityHistory = [];
+  cameraRgbHistory = [];
   document.getElementById("cameraToggle").textContent = "Start camera";
   document.getElementById("cameraToggle").className = "primary";
   updateCameraStatus("Camera off", false);
@@ -2901,12 +3003,22 @@ function cameraAnalyzeFrame(timestamp) {
   let sumB = 0;
   let count = 0;
   rects.forEach(function(rect) {
-    for (let y = rect.y; y < rect.y + rect.h; y += 2) {
-      for (let x = rect.x; x < rect.x + rect.w; x += 2) {
+    for (let y = rect.y; y < rect.y + rect.h; y += 3) {
+      for (let x = rect.x; x < rect.x + rect.w; x += 3) {
         const index = (y * width + x) * 4;
-        sumR += data[index];
-        sumG += data[index + 1];
-        sumB += data[index + 2];
+        const r = data[index];
+        const g = data[index + 1];
+        const b = data[index + 2];
+        const luma = .2126 * r + .7152 * g + .0722 * b;
+
+        // Clipped highlights and very dark pixels are dominated by exposure,
+        // shadows, hair, or glare rather than useful tiny skin-color changes.
+        if (luma < 35 || luma > 235) continue;
+        if (Math.max(r, g, b) - Math.min(r, g, b) > 190) continue;
+
+        sumR += r;
+        sumG += g;
+        sumB += b;
         count += 1;
       }
     }
@@ -2917,18 +3029,20 @@ function cameraAnalyzeFrame(timestamp) {
     const r = sumR / count;
     const g = sumG / count;
     const b = sumB / count;
-    const normalizedGreen = g / Math.max(1, r + g + b);
+    const posValue = cameraPosPulse(r, g, b);
 
-    if (cameraPpgFast == null || cameraPpgSlow == null) {
-      cameraPpgFast = normalizedGreen;
-      cameraPpgSlow = normalizedGreen;
+    if (posValue != null) {
+      if (cameraPpgFast == null || cameraPpgSlow == null) {
+        cameraPpgFast = posValue;
+        cameraPpgSlow = posValue;
+      }
+
+      const fastAlpha = cameraFilterAlpha(3.0, dt);
+      const slowAlpha = cameraFilterAlpha(0.7, dt);
+      cameraPpgFast += fastAlpha * (posValue - cameraPpgFast);
+      cameraPpgSlow += slowAlpha * (posValue - cameraPpgSlow);
+      ppg = (cameraPpgFast - cameraPpgSlow) * 1000;
     }
-
-    const fastAlpha = cameraFilterAlpha(3.0, dt);
-    const slowAlpha = cameraFilterAlpha(0.7, dt);
-    cameraPpgFast += fastAlpha * (normalizedGreen - cameraPpgFast);
-    cameraPpgSlow += slowAlpha * (normalizedGreen - cameraPpgSlow);
-    ppg = (cameraPpgFast - cameraPpgSlow) * 10000;
   }
 
   let motionSum = 0;
@@ -2949,43 +3063,51 @@ function cameraAnalyzeFrame(timestamp) {
   const motion = motionCount ? 100 * motionSum / motionCount / 255 : 0;
   cameraPreviousFrame = new Uint8ClampedArray(data);
 
-  const gain = Number(document.getElementById("cameraGain").value || 0);
-  if (!cameraPixelFast || cameraPixelFast.length !== width * height) {
-    cameraPixelFast = new Float32Array(width * height);
-    cameraPixelSlow = new Float32Array(width * height);
-    for (let pixel = 0; pixel < width * height; pixel++) {
-      const currentG = data[pixel * 4 + 1];
-      cameraPixelFast[pixel] = currentG;
-      cameraPixelSlow[pixel] = currentG;
-    }
-  }
-
-  const fastPixelAlpha = cameraFilterAlpha(3.0, dt);
-  const slowPixelAlpha = cameraFilterAlpha(0.7, dt);
+  const magnifyEnabled = document.getElementById("cameraMagnifyEnabled").checked;
+  const gain = magnifyEnabled
+    ? Number(document.getElementById("cameraGain").value || 0)
+    : 0;
   const output = new ImageData(new Uint8ClampedArray(data), width, height);
   const out = output.data;
 
-  rects.forEach(function(rect) {
-    for (let y = rect.y; y < rect.y + rect.h; y++) {
-      for (let x = rect.x; x < rect.x + rect.w; x++) {
-        const pixel = y * width + x;
-        const index = pixel * 4;
-        const currentG = data[index + 1];
-
-        let fast = cameraPixelFast[pixel];
-        let slow = cameraPixelSlow[pixel];
-        fast += fastPixelAlpha * (currentG - fast);
-        slow += slowPixelAlpha * (currentG - slow);
-        cameraPixelFast[pixel] = fast;
-        cameraPixelSlow[pixel] = slow;
-
-        const pulseBand = fast - slow;
-        out[index] = Math.max(0, Math.min(255, data[index] + pulseBand * gain * .12));
-        out[index + 1] = Math.max(0, Math.min(255, currentG + pulseBand * gain));
-        out[index + 2] = Math.max(0, Math.min(255, data[index + 2] + pulseBand * gain * .12));
+  if (magnifyEnabled && gain > 0) {
+    if (!cameraPixelFast || cameraPixelFast.length !== width * height) {
+      cameraPixelFast = new Float32Array(width * height);
+      cameraPixelSlow = new Float32Array(width * height);
+      for (let pixel = 0; pixel < width * height; pixel++) {
+        const currentG = data[pixel * 4 + 1];
+        cameraPixelFast[pixel] = currentG;
+        cameraPixelSlow[pixel] = currentG;
       }
     }
-  });
+
+    const fastPixelAlpha = cameraFilterAlpha(3.0, dt);
+    const slowPixelAlpha = cameraFilterAlpha(0.7, dt);
+    rects.forEach(function(rect) {
+      for (let y = rect.y; y < rect.y + rect.h; y++) {
+        for (let x = rect.x; x < rect.x + rect.w; x++) {
+          const pixel = y * width + x;
+          const index = pixel * 4;
+          const currentG = data[index + 1];
+
+          let fast = cameraPixelFast[pixel];
+          let slow = cameraPixelSlow[pixel];
+          fast += fastPixelAlpha * (currentG - fast);
+          slow += slowPixelAlpha * (currentG - slow);
+          cameraPixelFast[pixel] = fast;
+          cameraPixelSlow[pixel] = slow;
+
+          const pulseBand = fast - slow;
+          out[index] = Math.max(0, Math.min(255, data[index] + pulseBand * gain * .12));
+          out[index + 1] = Math.max(0, Math.min(255, currentG + pulseBand * gain));
+          out[index + 2] = Math.max(0, Math.min(255, data[index + 2] + pulseBand * gain * .12));
+        }
+      }
+    });
+  } else {
+    cameraPixelFast = null;
+    cameraPixelSlow = null;
+  }
 
   magCtx.putImageData(output, 0, 0);
   drawCameraGuides(sourceCtx, width, height);
@@ -3035,6 +3157,7 @@ async function cameraStartLocal() {
     cameraPendingSamples = [];
     cameraLastSampleTimestamp = null;
     cameraQualityHistory = [];
+    cameraRgbHistory = [];
     cameraLastFrameAt = 0;
     document.getElementById("cameraToggle").textContent = "Stop camera";
     document.getElementById("cameraToggle").className = "";
