@@ -246,6 +246,6 @@ For now the camera workspace is deliberately in **tuning mode**. It shows only t
 
 Beat-to-beat interval, HRV, coherence, respiration, and related camera-derived panels are intentionally hidden until camera timing can be validated against a contact pulse sensor. Camera heart rate is currently estimated from the dominant recent pulse-wave frequency and is withheld when the quality score is too low, rather than always emitting a physiological-looking number.
 
-When Lightstone or any emWave is live at the same time, camera comparison panels become available only while the camera quality gate is satisfied. These comparisons are intended for validation of the camera pipeline before richer camera physiology is re-enabled.
+When Lightstone or any emWave is live at the same time, camera comparison panels are available for validation, but their calculations update only while the camera quality gate is satisfied. These comparisons are intended to validate the camera pipeline before richer camera physiology is re-enabled.
 
 This is intentionally transparent and experimental. The quality percentage is a software signal-quality heuristic, not a medical confidence score.
