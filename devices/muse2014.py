@@ -15,6 +15,7 @@ from serial.tools import list_ports
 MUSE_EEG_RATE = 500.0
 MUSE_ACCEL_RATE = 50.0
 DEFAULT_AFE_GAIN = 1961.0
+MUSE_CONNECTION_ATTEMPT_LIMIT = 40.0
 CHANNEL_NAMES = ("TP9", "FP1", "FP2", "TP10")
 
 try:
@@ -484,11 +485,29 @@ class Muse2014SerialClient:
         self.status = MuseStatus()
         self.command_terminator = b"\r"
         self.passive_stream_active = False
+        self.attempt_deadline = 0.0
 
     def _notify_status(self, stage: str) -> None:
         self.status.stage = stage
         if self.on_status:
             self.on_status(self.status)
+
+    def _remaining_attempt_time(self) -> float:
+        if not self.attempt_deadline:
+            return MUSE_CONNECTION_ATTEMPT_LIMIT
+        return max(0.0, self.attempt_deadline - time.monotonic())
+
+    def _check_attempt_deadline(self) -> None:
+        if self.attempt_deadline and time.monotonic() >= self.attempt_deadline:
+            self._notify_status("Attempt timed out")
+            raise TimeoutError(
+                f"Muse connection attempt exceeded {int(MUSE_CONNECTION_ATTEMPT_LIMIT)} seconds"
+            )
+
+    def _sleep_with_deadline(self, seconds: float) -> None:
+        self._check_attempt_deadline()
+        time.sleep(min(seconds, self._remaining_attempt_time()))
+        self._check_attempt_deadline()
 
     def _write_command(self, command: str) -> None:
         if self.serial is None:
@@ -500,14 +519,19 @@ class Muse2014SerialClient:
         if self.serial is None:
             return ""
 
-        end = time.monotonic() + seconds
+        self._check_attempt_deadline()
+        end = min(
+            time.monotonic() + seconds,
+            self.attempt_deadline if self.attempt_deadline else time.monotonic() + seconds,
+        )
         chunks: list[bytes] = []
         while time.monotonic() < end:
+            self._check_attempt_deadline()
             waiting = self.serial.in_waiting
             if waiting:
                 chunks.append(self.serial.read(waiting))
             else:
-                time.sleep(0.03)
+                self._sleep_with_deadline(0.03)
         return b"".join(chunks).decode("utf-8", errors="ignore").strip()
 
     def _dispatch_packet(self, kind: str, packet: bytes) -> None:
@@ -535,11 +559,16 @@ class Muse2014SerialClient:
             return False
 
         self._notify_status("Listening for Muse data before sending commands")
-        end = time.monotonic() + seconds
+        self._check_attempt_deadline()
+        end = min(
+            time.monotonic() + seconds,
+            self.attempt_deadline if self.attempt_deadline else time.monotonic() + seconds,
+        )
         captured = bytearray()
         counts = {"eeg": 0, "accelerometer": 0, "battery": 0}
 
         while time.monotonic() < end and len(captured) < 65536:
+            self._check_attempt_deadline()
             try:
                 data = self.serial.read(4096)
             except Exception:
@@ -628,12 +657,12 @@ class Muse2014SerialClient:
         # The RFCOMM channel can report open before the physical headset has
         # finished settling. Give it a moment before configuration commands.
         self._notify_status("Waiting for Bluetooth link")
-        time.sleep(1.0)
+        self._sleep_with_deadline(1.0)
         self.serial.reset_input_buffer()
 
         self._notify_status("Stopping any previous Muse stream")
         self._write_command("h")
-        time.sleep(1.0)
+        self._sleep_with_deadline(1.0)
         self.serial.reset_input_buffer()
 
         for attempt in range(1, attempts + 1):
@@ -642,7 +671,7 @@ class Muse2014SerialClient:
             version = self._read_text(1.2)
             if version:
                 return version
-            time.sleep(0.5)
+            self._sleep_with_deadline(0.5)
         return ""
 
     def _open_mac_serial_with_handshake(self) -> str:
@@ -651,10 +680,12 @@ class Muse2014SerialClient:
         tried: list[str] = []
 
         for candidate in candidates:
+            self._check_attempt_deadline()
             if not glob.glob(candidate):
                 continue
 
             for terminator, label in ((b"\r", "CR"), (b"\r\n", "CRLF")):
+                self._check_attempt_deadline()
                 tried.append(f"{candidate} ({label})")
                 self.status.transport = f"macOS Bluetooth serial: {candidate}"
                 self._notify_status(
@@ -684,7 +715,7 @@ class Muse2014SerialClient:
                     except Exception:
                         pass
                     self.serial = None
-                time.sleep(0.3)
+                self._sleep_with_deadline(0.3)
 
         raise RuntimeError(
             "No macOS Muse serial endpoint answered the version handshake. "
@@ -706,6 +737,7 @@ class Muse2014SerialClient:
 
         tried: list[str] = []
         for item in services:
+            self._check_attempt_deadline()
             channel_id = int(item["channel"])
             service_name = str(item["name"])
             tried.append(f"{channel_id} ({service_name})")
@@ -732,7 +764,7 @@ class Muse2014SerialClient:
                 except Exception:
                     pass
                 self.serial = None
-            time.sleep(0.4)
+            self._sleep_with_deadline(0.4)
 
         self.status.rfcomm_channel = None
         self._notify_status("No advertised RFCOMM channel answered as Muse")
@@ -742,6 +774,11 @@ class Muse2014SerialClient:
         )
 
     def open_and_configure(self) -> MuseStatus:
+        self.attempt_deadline = time.monotonic() + MUSE_CONNECTION_ATTEMPT_LIMIT
+        self._notify_status(
+            f"Starting connection pass (max {int(MUSE_CONNECTION_ATTEMPT_LIMIT)} seconds)"
+        )
+
         if sys.platform == "darwin":
             serial_error = ""
             try:
