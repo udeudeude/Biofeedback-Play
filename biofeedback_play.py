@@ -3089,10 +3089,11 @@ function cameraAnalyzeFrame(timestamp) {
   const gain = magnifyEnabled
     ? Number(document.getElementById("cameraGain").value || 0)
     : 0;
-  const output = new ImageData(new Uint8ClampedArray(data), width, height);
-  const out = output.data;
 
   if (magnifyEnabled && gain > 0) {
+    const output = new ImageData(new Uint8ClampedArray(data), width, height);
+    const out = output.data;
+
     if (!cameraPixelFast || cameraPixelFast.length !== width * height) {
       cameraPixelFast = new Float32Array(width * height);
       cameraPixelSlow = new Float32Array(width * height);
@@ -3126,12 +3127,13 @@ function cameraAnalyzeFrame(timestamp) {
         }
       }
     });
+    magCtx.putImageData(output, 0, 0);
   } else {
     cameraPixelFast = null;
     cameraPixelSlow = null;
+    magCtx.clearRect(0, 0, width, height);
+    magCtx.drawImage(source, 0, 0);
   }
-
-  magCtx.putImageData(output, 0, 0);
   drawCameraGuides(sourceCtx, width, height);
   drawCameraGuides(magCtx, width, height);
 
