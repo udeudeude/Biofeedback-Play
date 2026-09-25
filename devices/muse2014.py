@@ -171,6 +171,7 @@ class MuseStatus:
     transport: str = ""
     rfcomm_services: str = ""
     rfcomm_channel: int | None = None
+    passive_probe: str = ""
 
 
 if HAVE_NATIVE_MAC_BLUETOOTH:
@@ -482,6 +483,7 @@ class Muse2014SerialClient:
         self.parser = MusePacketParser()
         self.status = MuseStatus()
         self.command_terminator = b"\r"
+        self.passive_stream_active = False
 
     def _notify_status(self, stage: str) -> None:
         self.status.stage = stage
@@ -507,6 +509,64 @@ class Muse2014SerialClient:
             else:
                 time.sleep(0.03)
         return b"".join(chunks).decode("utf-8", errors="ignore").strip()
+
+    def _dispatch_packet(self, kind: str, packet: bytes) -> None:
+        if kind == "eeg":
+            self.on_eeg(
+                decode_eeg_packet(
+                    packet,
+                    afe_gain=self.status.afe_gain or DEFAULT_AFE_GAIN,
+                )
+            )
+        elif kind == "accelerometer":
+            self.on_accelerometer(decode_accelerometer_packet(packet))
+        elif kind == "battery":
+            self.on_battery(decode_battery_packet(packet))
+
+    def _probe_passive_stream(self, seconds: float = 3.0) -> bool:
+        """Listen before sending any command.
+
+        Contemporary documentation of a working 2014 Muse on macOS reports
+        that opening the Muse-RN-iAP serial endpoint at 115200 immediately
+        produced a data stream. Probe for that behavior before sending 'h',
+        because stopping a stream first may destroy the most useful evidence.
+        """
+        if self.serial is None:
+            return False
+
+        self._notify_status("Listening for Muse data before sending commands")
+        end = time.monotonic() + seconds
+        captured = bytearray()
+        counts = {"eeg": 0, "accelerometer": 0, "battery": 0}
+
+        while time.monotonic() < end and len(captured) < 65536:
+            try:
+                data = self.serial.read(4096)
+            except Exception:
+                break
+            if not data:
+                continue
+
+            captured.extend(data)
+            for kind, packet in self.parser.feed(data):
+                counts[kind] += 1
+                self._dispatch_packet(kind, packet)
+
+        preview = bytes(captured[:32]).hex(" ") if captured else "none"
+        self.status.passive_probe = (
+            f"{len(captured)} bytes before commands; "
+            f"EEG packets {counts['eeg']}, accelerometer {counts['accelerometer']}, "
+            f"battery {counts['battery']}; first bytes: {preview}"
+        )
+        self._notify_status("Passive Muse serial probe complete")
+
+        recognized = sum(counts.values())
+        if recognized:
+            self.passive_stream_active = True
+            self.status.version = "Legacy Mac stream active; version handshake not required"
+            self._notify_status("Muse data arrived before configuration")
+            return True
+        return False
 
     @staticmethod
     def _muse_name_from_port(port: str) -> str:
@@ -603,6 +663,12 @@ class Muse2014SerialClient:
 
                 try:
                     self._open_virtual_serial_transport(candidate)
+
+                    # Historic Mac MU-01 setups could begin streaming as soon
+                    # as the tty endpoint opened. Listen first, before 'h'.
+                    if self._probe_passive_stream(seconds=3.0):
+                        return self.status.version
+
                     version = self._version_handshake(
                         attempts=2,
                         terminator=terminator,
@@ -699,6 +765,9 @@ class Muse2014SerialClient:
             version = self._version_handshake(attempts=3, terminator=b"\r\n")
 
         self.status.version = version
+        if self.passive_stream_active:
+            return self.status
+
         if not version:
             self._notify_status("RFCOMM opened, but Muse did not answer")
             raise RuntimeError(
@@ -751,17 +820,7 @@ class Muse2014SerialClient:
                 continue
 
             for kind, packet in self.parser.feed(data):
-                if kind == "eeg":
-                    self.on_eeg(
-                        decode_eeg_packet(
-                            packet,
-                            afe_gain=self.status.afe_gain or DEFAULT_AFE_GAIN,
-                        )
-                    )
-                elif kind == "accelerometer":
-                    self.on_accelerometer(decode_accelerometer_packet(packet))
-                elif kind == "battery":
-                    self.on_battery(decode_battery_packet(packet))
+                self._dispatch_packet(kind, packet)
 
     def close(self) -> None:
         if self.serial is None:
