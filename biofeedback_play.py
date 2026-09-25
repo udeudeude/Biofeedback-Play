@@ -1042,6 +1042,8 @@ class BiofeedbackState:
         self.muse_last_error = ""
         self.muse_port = str(settings.get("muse_port") or "")
         self.muse_version = ""
+        self.muse_status_text = ""
+        self.muse_stage = "Waiting for serial port"
         self.muse_afe_gain = None
         self.muse_battery = None
         self.muse_last_data_monotonic = 0.0
@@ -1211,6 +1213,8 @@ class BiofeedbackState:
                 "muse_last_error": self.muse_last_error,
                 "muse_port": self.muse_port,
                 "muse_version": self.muse_version,
+                "muse_status_text": self.muse_status_text,
+                "muse_stage": self.muse_stage,
                 "muse_afe_gain": self.muse_afe_gain,
                 "muse_battery": self.muse_battery,
                 "muse_eeg_sample_count": self.muse_eeg_seq,
@@ -1261,6 +1265,8 @@ class BiofeedbackState:
                     "accel_sample_count": self.muse_accel_seq,
                     "port": self.muse_port,
                     "version": self.muse_version,
+                    "status_text": self.muse_status_text,
+                    "stage": self.muse_stage,
                     "afe_gain": self.muse_afe_gain,
                     "battery": self.muse_battery,
                 },
@@ -1798,6 +1804,8 @@ class BiofeedbackState:
     def _store_muse_status(self, status) -> None:
         with self.lock:
             self.muse_version = status.version
+            self.muse_status_text = status.status_text
+            self.muse_stage = status.stage
             self.muse_afe_gain = status.afe_gain
 
     def _store_emwave_packet(self, parsed: dict, unit_number: int = 1) -> None:
@@ -2002,6 +2010,9 @@ class BiofeedbackState:
             if not should_run or not port:
                 with self.lock:
                     self.muse_connected = False
+                    self.muse_stage = (
+                        "Acquisition stopped" if not should_run else "Waiting for serial port"
+                    )
                 time.sleep(0.5)
                 continue
 
@@ -2034,6 +2045,8 @@ class BiofeedbackState:
                 with self.lock:
                     self.muse_connected = False
                     self.muse_last_error = str(exc)
+                    if not self.muse_stage:
+                        self.muse_stage = "Muse connection failed"
                 time.sleep(1.0)
             finally:
                 client.close()
@@ -3517,6 +3530,8 @@ function renderDeviceSetup(devices) {
         : "—";
       const afe = device.afe_gain != null ? String(device.afe_gain) : "—";
       const version = device.version ? escapeHtml(device.version) : "—";
+      const museStage = device.stage ? escapeHtml(device.stage) : "—";
+      const museStatusText = device.status_text ? escapeHtml(device.status_text) : "—";
 
       const portSummary = musePorts.length
         ? musePorts.map(function(port) {
@@ -3545,9 +3560,11 @@ function renderDeviceSetup(devices) {
             '<div><strong>Serial ports found:</strong> ' + musePorts.length + '</div>' +
             portSummary +
             '<div><strong>Selected port:</strong> <span class="mono">' + escapeHtml(currentPort || "none") + '</span></div>' +
+            '<div><strong>Connection stage:</strong> ' + museStage + '</div>' +
             '<div><strong>Battery:</strong> ' + battery + '</div>' +
             '<div><strong>AFE gain:</strong> ' + afe + '</div>' +
-            '<div><strong>Version/status:</strong> <span class="mono">' + version + '</span></div>' +
+            '<div><strong>Version:</strong> <span class="mono">' + version + '</span></div>' +
+            '<div><strong>Headband status:</strong> <span class="mono">' + museStatusText + '</span></div>' +
             '<div><strong>EEG samples:</strong> ' + Number(device.eeg_sample_count || 0).toLocaleString() +
               ' · <strong>Accelerometer samples:</strong> ' + Number(device.accel_sample_count || 0).toLocaleString() + '</div>' +
           '</div>' +
