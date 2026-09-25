@@ -1,2 +1,3 @@
 hidapi==0.15.0
 pyserial==3.5
+pyobjc-framework-IOBluetooth>=12.0; sys_platform == "darwin"
