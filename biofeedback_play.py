@@ -88,6 +88,14 @@ DEVICE_DEFINITIONS = {
         "usb_id": "not applicable",
         "summary": "MU-01 EEG headband with four EEG channels, accelerometer, and battery telemetry.",
     },
+    "camera": {
+        "name": "Camera",
+        "manufacturer": "Browser camera",
+        "transport": "Local browser MediaDevices",
+        "usb_id": "browser-managed",
+        "summary": "Local camera analysis for subtle facial color and motion changes. Video stays in the browser.",
+        "browser_controlled": True,
+    },
 }
 
 SIGNAL_DEFINITIONS = {
@@ -221,6 +229,36 @@ SIGNAL_DEFINITIONS = {
         "nominal_rate": MUSE_ACCEL_RATE,
         "value_key": "z",
     },
+    "camera.ppg_raw": {
+        "device_id": "camera",
+        "name": "Camera color pulse",
+        "short_name": "Camera pulse",
+        "data_label": "Facial color-change waveform",
+        "unit": "relative normalized-green units",
+        "description": (
+            "Locally extracted color waveform from guided forehead and cheek regions. "
+            "It is an experimental remote photoplethysmography signal, not a calibrated optical sensor."
+        ),
+        "audio": "Pitch follows the camera-derived pulse waveform.",
+        "osc": "/biofeedback/camera/ppg_raw",
+        "nominal_rate": 15.0,
+        "value_key": "ppg",
+    },
+    "camera.motion_raw": {
+        "device_id": "camera",
+        "name": "Camera motion",
+        "short_name": "Motion",
+        "data_label": "Frame-to-frame facial motion",
+        "unit": "% mean pixel change",
+        "description": (
+            "Mean frame-to-frame luminance change in the guided face region. "
+            "Useful both as a movement signal and as a warning that motion may contaminate camera pulse extraction."
+        ),
+        "audio": "Pitch follows recent camera motion intensity.",
+        "osc": "/biofeedback/camera/motion_raw",
+        "nominal_rate": 15.0,
+        "value_key": "motion",
+    },
 }
 
 def _derived_signal(
@@ -316,6 +354,9 @@ SIGNAL_DEFINITIONS.update(_pulse_derived_definitions(
 ))
 SIGNAL_DEFINITIONS.update(_pulse_derived_definitions(
     "emwave", "emWave ear clip", "/biofeedback/emwave"
+))
+SIGNAL_DEFINITIONS.update(_pulse_derived_definitions(
+    "camera", "camera-derived facial color waveform", "/biofeedback/camera"
 ))
 
 SIGNAL_DEFINITIONS.update({
@@ -548,6 +589,20 @@ for _first_index in range(1, 5):
             f"emWave {_second_index}",
             f"emwave{_first_index}_emwave{_second_index}",
         )
+
+
+_add_pair_signal_definitions(
+    "lightstone", "camera", "Lightstone", "Camera", "lightstone_camera"
+)
+for _emwave_index in range(1, 5):
+    _emwave_id = emwave_device_id(_emwave_index)
+    _add_pair_signal_definitions(
+        _emwave_id,
+        "camera",
+        f"emWave {_emwave_index}",
+        "Camera",
+        f"emwave{_emwave_index}_camera",
+    )
 
 
 class EmWaveParser:
