@@ -78,19 +78,24 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("comparison.emwave1_emwave2.beat_offset", SIGNAL_DEFINITIONS)
         self.assertIn("comparison.emwave1_emwave2.amplitude_ratio", SIGNAL_DEFINITIONS)
 
-    def test_ui_marks_direct_calculated_and_sources(self):
+    def test_ui_has_glanceable_signal_hierarchy(self):
         self.assertIn('data-signal-filter="direct"', HTML)
         self.assertIn('data-signal-filter="calculated"', HTML)
         self.assertIn('data-signal-filter="comparison"', HTML)
-        self.assertIn("Data from", HTML)
+        self.assertIn("Direct sensor data", HTML)
+        self.assertIn("Derived from this sensor", HTML)
+        self.assertIn("Cross-device comparisons", HTML)
+        self.assertIn("What the hardware itself is sending", HTML)
+        self.assertIn("Calculations made from the direct signal above", HTML)
+        self.assertIn("signalMeaning", HTML)
+        self.assertIn("Details & technical information", HTML)
         self.assertIn("kind-badge", HTML)
         self.assertIn("source-chip", HTML)
 
-    def test_ui_supports_persistent_panel_reordering(self):
-        self.assertIn('draggable="true"', HTML)
-        self.assertIn("Drag to rearrange", HTML)
-        self.assertIn("biofeedbackPlay.panelOrder.v1", HTML)
-        self.assertIn("Reset panel order", HTML)
+    def test_use_tab_only_shows_live_signals(self):
+        self.assertIn("Only live device signals appear here", HTML)
+        self.assertIn("signal.connected && signal.running", HTML)
+        self.assertIn("No live device data", HTML)
 
     def test_camera_signals_and_lab_exist(self):
         self.assertIn("camera.ppg_raw", SIGNAL_DEFINITIONS)
@@ -105,7 +110,10 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("cameraSourceCanvas", HTML)
         self.assertIn("cameraMagnifiedCanvas", HTML)
         self.assertIn("cameraMagnifyEnabled", HTML)
-        self.assertIn("No video is uploaded", HTML)
+        self.assertIn("Optional input · Camera", HTML)
+        self.assertIn("camera-lab-details", HTML)
+        self.assertIn('classList.add("active")', HTML)
+        self.assertIn('classList.remove("active")', HTML)
         self.assertIn("cameraQualityValue", HTML)
         self.assertIn("Heartbeat-band color magnification", HTML)
         self.assertIn("POS-style RGB combination", HTML)
