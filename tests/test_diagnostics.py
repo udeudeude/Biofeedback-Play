@@ -113,9 +113,9 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("kind-badge", HTML)
         self.assertIn("source-chip", HTML)
 
-    def test_use_tab_only_shows_live_signals(self):
-        self.assertIn("Only live device signals appear here", HTML)
-        self.assertIn("signal.connected && signal.running", HTML)
+    def test_use_tab_only_shows_enabled_live_signals(self):
+        self.assertIn("Only live signals from enabled device views appear below.", HTML)
+        self.assertIn("signal.connected && signal.running && signalViewEnabled(signal)", HTML)
         self.assertIn("No live device data", HTML)
 
     def test_camera_signals_and_lab_exist(self):
