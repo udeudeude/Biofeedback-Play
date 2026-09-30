@@ -4301,8 +4301,24 @@ function updateSignalPanels(signals) {
       Number(signal.sample_count || 0).toLocaleString();
 
     const extra = document.getElementById("extra_" + id);
-    if (signal.packet_gaps != null) {
-      extra.innerHTML = '<strong>Packet gaps:</strong> ' + escapeHtml(signal.packet_gaps);
+    if (!signal.derived && signal.packet_gaps != null) {
+      const details = [
+        '<strong>Packet gaps:</strong> ' + escapeHtml(signal.packet_gaps)
+      ];
+      if (signal.estimated_sample_rate_hz != null) {
+        details.push(
+          '<strong>Waveform rate:</strong> ' +
+          escapeHtml(Number(signal.estimated_sample_rate_hz).toFixed(1)) +
+          ' samples/s'
+        );
+      }
+      if (Number(signal.clock_resets || 0) > 0) {
+        details.push(
+          '<strong>Timing re-anchors:</strong> ' +
+          escapeHtml(signal.clock_resets)
+        );
+      }
+      extra.innerHTML = details.join(' · ');
     } else {
       extra.textContent = "";
     }
@@ -4457,6 +4473,15 @@ function renderDeviceSetup(devices) {
           '<div><strong>Hardware ID:</strong> <span class="mono">' + escapeHtml(device.usb_id) + '</span></div>' +
           '<div><strong>Samples received:</strong> ' + Number(device.sample_count || 0).toLocaleString() + '</div>' +
           (device.packet_gaps != null ? '<div><strong>Packet gaps:</strong> ' + escapeHtml(device.packet_gaps) + '</div>' : '') +
+          (device.estimated_sample_rate_hz != null
+            ? '<div><strong>Estimated waveform rate:</strong> ' +
+              escapeHtml(Number(device.estimated_sample_rate_hz).toFixed(1)) +
+              ' samples/s</div>'
+            : '') +
+          (Number(device.clock_resets || 0) > 0
+            ? '<div><strong>Timing re-anchors:</strong> ' +
+              escapeHtml(device.clock_resets) + '</div>'
+            : '') +
           (device.error ? '<div style="color:#ff9b9b"><strong>Error:</strong> ' + escapeHtml(device.error) + '</div>' : '') +
         '</div>' +
         '<div class="device-signals">' + signals + '</div>' +
