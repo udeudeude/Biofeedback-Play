@@ -169,6 +169,15 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn('Light mode', HTML)
         self.assertIn('Dark mode', HTML)
 
+    def test_signal_panels_have_persistent_three_state_collapse(self):
+        self.assertIn("biofeedbackPlay.panelViews.v1", HTML)
+        self.assertIn("view-full", HTML)
+        self.assertIn("view-mini", HTML)
+        self.assertIn("view-name", HTML)
+        self.assertIn("data-panel-view-toggle", HTML)
+        self.assertIn("signal-collapse-device", HTML)
+        self.assertIn("cyclePanelView", HTML)
+
     def test_ui_has_persistent_device_view_controls(self):
         self.assertIn('id="deviceViewButtons"', HTML)
         self.assertIn('biofeedbackPlay.deviceViews.v1', HTML)

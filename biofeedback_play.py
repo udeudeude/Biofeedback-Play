@@ -2862,6 +2862,87 @@ input.port { width: 90px; }
 .signal-panel canvas { height: 92px; margin: 0 13px 10px; width: calc(100% - 26px); }
 .signal-panel.direct canvas { height: 165px; }
 .signal-panel.comparison canvas { height: 110px; }
+.signal-header-actions {
+  display: flex; align-items: center; gap: 6px; flex: 0 0 auto;
+}
+.panel-view-toggle {
+  padding: 5px 7px; min-width: 44px; font-size: 10px; line-height: 1;
+  color: var(--muted); background: transparent;
+}
+.panel-view-toggle:hover { color: var(--text); background: var(--soft); }
+.signal-collapse-device { display: none; }
+
+/* Three per-panel density states. Full is the existing card. Mini keeps only
+   the signal name and a small live graph. Name keeps only identity. */
+.signal-panel.view-mini {
+  grid-column: span 4 !important;
+  display: grid;
+  grid-template-columns: minmax(125px,.8fr) minmax(145px,1.2fr);
+  align-items: center;
+  min-height: 72px;
+}
+.signal-panel.view-mini .signal-panel-header {
+  grid-column: 1;
+  padding: 9px 7px 9px 10px;
+  align-items: center;
+}
+.signal-panel.view-mini .signal-title-row { gap: 0; }
+.signal-panel.view-mini .signal-title {
+  font-size: 14px !important;
+  line-height: 1.18;
+}
+.signal-panel.view-mini .kind-badge,
+.signal-panel.view-mini .source-chips,
+.signal-panel.view-mini .signal-glance,
+.signal-panel.view-mini .signal-tech,
+.signal-panel.view-mini .signal-collapse-device,
+.signal-panel.view-mini [id^="audio_"] {
+  display: none;
+}
+.signal-panel.view-mini canvas {
+  grid-column: 2;
+  height: 54px !important;
+  width: calc(100% - 10px);
+  margin: 8px 10px 8px 0;
+  border-radius: 7px;
+}
+.signal-panel.view-mini .panel-view-toggle {
+  min-width: 36px; padding: 4px 5px;
+}
+
+.signal-panel.view-name {
+  grid-column: span 3 !important;
+  min-height: 58px;
+}
+.signal-panel.view-name .signal-panel-header {
+  padding: 9px 10px;
+  align-items: center;
+}
+.signal-panel.view-name .signal-title-row { gap: 0; }
+.signal-panel.view-name .signal-title {
+  font-size: 14px !important;
+  line-height: 1.15;
+}
+.signal-panel.view-name .signal-collapse-device {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.2;
+}
+.signal-panel.view-name .kind-badge,
+.signal-panel.view-name .source-chips,
+.signal-panel.view-name .signal-glance,
+.signal-panel.view-name .signal-tech,
+.signal-panel.view-name canvas,
+.signal-panel.view-name [id^="audio_"] {
+  display: none;
+}
+.signal-panel.view-name .panel-view-toggle {
+  min-width: 38px; padding: 4px 5px;
+}
+.signal-panel.view-mini.offline,
+.signal-panel.view-name.offline { display: none; }
 .kind-badge {
   display: inline-flex; align-items: center; gap: 5px;
   border: 1px solid var(--line); border-radius: 999px;
@@ -3098,7 +3179,11 @@ canvas {
   border-radius: 14px; color: var(--muted); text-align: center;
 }
 @media (max-width: 900px) {
-  .signal-panel, .signal-panel.comparison, .half, .device-card { grid-column: span 12; }
+  .signal-panel, .signal-panel.comparison, .signal-panel.view-mini, .signal-panel.view-name,
+  .half, .device-card { grid-column: span 12 !important; }
+  .signal-panel.view-mini {
+    grid-template-columns: minmax(130px,.8fr) minmax(150px,1.2fr);
+  }
   .camera-lab-grid { grid-template-columns: 1fr; }
   .third { grid-column: span 12; }
   .metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
@@ -3308,6 +3393,7 @@ let signalFilter = "all";
 let deviceViewState = loadDeviceViewState();
 let deviceViewSignature = "";
 let panelOrder = loadPanelOrder();
+let panelViewState = loadPanelViewState();
 let draggedSignalId = null;
 let cameraStream = null;
 let cameraAnimationFrame = null;
@@ -3381,6 +3467,65 @@ function savePanelOrder() {
       localStorage.removeItem("biofeedbackPlay.panelOrder.v1");
     }
   } catch (_) {}
+}
+
+function loadPanelViewState() {
+  try {
+    const raw = localStorage.getItem("biofeedbackPlay.panelViews.v1");
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function savePanelViewState() {
+  try {
+    localStorage.setItem("biofeedbackPlay.panelViews.v1", JSON.stringify(panelViewState));
+  } catch (_) {}
+}
+
+function panelViewMode(signalId) {
+  const mode = panelViewState[signalId];
+  return mode === "mini" || mode === "name" ? mode : "full";
+}
+
+function nextPanelViewMode(mode) {
+  if (mode === "full") return "mini";
+  if (mode === "mini") return "name";
+  return "full";
+}
+
+function cyclePanelView(signalId) {
+  const current = panelViewMode(signalId);
+  const next = nextPanelViewMode(current);
+  if (next === "full") delete panelViewState[signalId];
+  else panelViewState[signalId] = next;
+  savePanelViewState();
+
+  const signal = catalog.signals.find(function(item) { return item.id === signalId; });
+  if (!signal) return;
+  const panel = document.getElementById("panel_" + domId(signalId));
+  if (!panel) return;
+
+  panel.classList.remove("view-full", "view-mini", "view-name");
+  panel.classList.add("view-" + next);
+  const button = panel.querySelector("[data-panel-view-toggle]");
+  if (button) {
+    const labels = {full: "Full", mini: "Mini", name: "Name"};
+    button.textContent = labels[next];
+    button.title =
+      "Panel view: " + labels[next] + ". Click for " +
+      labels[nextPanelViewMode(next)].toLowerCase() + " view.";
+    button.setAttribute(
+      "aria-label",
+      "Panel view is " + labels[next] + ". Click for " +
+      labels[nextPanelViewMode(next)].toLowerCase() + " view."
+    );
+  }
+  requestAnimationFrame(function() {
+    if (next !== "name") drawSignal(signal);
+  });
 }
 
 const DEVICE_COLORS = {
@@ -4048,6 +4193,9 @@ function renderSignalCard(signal) {
   ensureSignalState(signal);
   const id = domId(signal.id);
   const kind = signalKind(signal);
+  const viewMode = panelViewMode(signal.id);
+  const viewLabels = {full: "Full", mini: "Mini", name: "Name"};
+  const nextView = nextPanelViewMode(viewMode);
   const sourceIds = signalSourceIds(signal);
   const sourceNames = signal.data_sources || [signal.device_name];
   const sourceChips = kind === "comparison" ? sourceNames.map(function(name, index) {
@@ -4059,18 +4207,26 @@ function renderSignalCard(signal) {
 
   return (
     '<article id="panel_' + id + '" data-signal-id="' + escapeHtml(signal.id) +
-      '" class="signal-panel ' + kind +
+      '" class="signal-panel ' + kind + ' view-' + viewMode +
       '" style="--device-accent:' + escapeHtml(deviceColor(signal.device_id)) +
       ';--panel-accent:' + escapeHtml(accent) + '">' +
       '<div class="signal-panel-header">' +
-        '<div>' +
+        '<div class="signal-title-block">' +
           '<div class="signal-title-row">' +
             '<span class="kind-badge ' + kind + '">' + escapeHtml(signalKindLabel(signal)) + '</span>' +
             '<div class="signal-title">' + escapeHtml(signal.name) + '</div>' +
           '</div>' +
+          '<div class="signal-collapse-device">' + escapeHtml(signal.device_name || "") + '</div>' +
           (kind === "comparison" ? '<div class="source-chips">' + sourceChips + '</div>' : '') +
         '</div>' +
-        '<button id="audio_' + id + '" disabled>Audio</button>' +
+        '<div class="signal-header-actions">' +
+          '<button id="audio_' + id + '" disabled>Audio</button>' +
+          '<button class="panel-view-toggle" data-panel-view-toggle="' + escapeHtml(signal.id) + '"' +
+            ' title="Panel view: ' + viewLabels[viewMode] + '. Click for ' + viewLabels[nextView].toLowerCase() + ' view."' +
+            ' aria-label="Panel view is ' + viewLabels[viewMode] + '. Click for ' + viewLabels[nextView].toLowerCase() + ' view.">' +
+            viewLabels[viewMode] +
+          '</button>' +
+        '</div>' +
       '</div>' +
       '<div class="signal-glance">' +
         '<div class="signal-primary-value">' +
@@ -4207,6 +4363,11 @@ function renderSignalPanels(signals) {
   signals.forEach(function(signal) {
     const button = document.getElementById("audio_" + domId(signal.id));
     if (button) button.onclick = function() { toggleAudio(signal.id); };
+  });
+  grid.querySelectorAll("[data-panel-view-toggle]").forEach(function(button) {
+    button.onclick = function() {
+      cyclePanelView(button.dataset.panelViewToggle);
+    };
   });
 }
 
