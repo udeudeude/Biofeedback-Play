@@ -18,36 +18,34 @@ The browser interface has two primary tabs.
 
 This is the live-feedback workspace.
 
-Each raw or derived signal gets its own panel. Panels identify:
+Only **live** device signals are shown here. Signals are grouped first by physical source, so connecting an emWave creates one clearly labeled emWave section rather than adding cards to an undifferentiated wall.
 
-- the source device or device pair
-- what is being measured or calculated
-- units and interpretation cautions
-- current value and recent range
-- total samples received
-- nominal update/sample rate when known
-- OSC address
-- useful device-specific status such as emWave packet gaps
+Inside each device section:
 
-If the required source device is not connected, the panel collapses automatically.
+- **Direct sensor data** comes first and is visually dominant. This is what the hardware itself is sending.
+- **Derived from this sensor** follows in smaller cards. These are calculations made from the direct signal.
+- Each card leads with the current value and a one-line plain-language statement of what it signifies.
+- Technical material such as recent range, sample count, OSC address, detailed definition, and nominal rate is tucked under **Details & technical information**.
+- Cross-device calculations live in their own **Cross-device comparisons** section rather than being mixed into the source-device groups.
+
+Disconnected devices remain available under **Device setup** instead of occupying the live workspace.
+
+The optional camera experiment sits below the live signal groups and remains compact while off. Its full camera workspace appears only after the camera is started.
 
 Each live panel has an independent **Audio** control. Audio is generated locally with the Web Audio API. It is sonification, not a reconstructed heartbeat or diagnostic sound.
 
 ### Visual language
 
-The live workspace uses a consistent visual grammar:
+The live workspace uses a stronger hierarchy:
 
-- each input device has its own accent color, reused on signal panels, source chips, setup cards, and graph traces
-- direct sensor streams carry a **Direct** badge and solid graph line
-- single-device calculations carry a **Calculated** badge and dashed graph line
-- cross-device calculations carry a **Cross-device** badge and a multi-device accent stripe
-- panels explicitly list every device that contributes data
-- live panels sort ahead of disconnected panels
-- disconnected panels stay compact instead of stretching to match a neighboring live panel
-- the toolbar can filter the workspace to All, Direct, Calculated, or Comparisons
-- panels can be rearranged by dragging their ⠿ handle; the custom order is remembered in the browser and can be reset from the toolbar
+- each physical input device gets a distinct section with its own accent color and device description
+- direct hardware streams are labeled **Direct sensor**, use the strongest visual treatment, and span the section width
+- calculations from one device are labeled **Derived** and appear as smaller secondary cards
+- cross-device calculations are labeled **Comparison** and live in a separate validation section
+- one-line meanings remain visible at a glance; deeper definitions and transport details stay collapsed
+- the toolbar can filter the workspace to Everything, Direct sensor data, Derived, or Comparisons
 
-These distinctions are intentionally secondary to the signal names and values: they should help orientation without turning the dashboard into a color-key puzzle.
+The goal is that source, provenance, and meaning are apparent before detailed reading is necessary.
 
 ### Device setup
 
