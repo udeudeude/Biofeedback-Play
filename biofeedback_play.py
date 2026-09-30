@@ -8,6 +8,7 @@ import math
 import os
 import re
 import socket
+import statistics
 import struct
 import subprocess
 import threading
@@ -42,6 +43,10 @@ PRODUCT_ID = 0x0001
 EMWAVE_VENDOR_ID = 0x0E30
 EMWAVE_PRODUCT_ID = 0x0002
 EMWAVE_NOMINAL_SAMPLE_RATE = 370.0
+EMWAVE_SAMPLES_PER_REPORT = 6
+EMWAVE_RATE_ESTIMATE_WINDOW = 512
+EMWAVE_RATE_MIN = 330.0
+EMWAVE_RATE_MAX = 410.0
 HOST = "127.0.0.1"
 PORT = 8765
 
@@ -654,6 +659,113 @@ for _emwave_index in range(1, 5):
     )
 
 
+class EmWaveSampleClock:
+    """Reconstruct emWave sample time without inheriting USB delivery jitter.
+
+    The module sends six consecutive waveform samples per numbered report. macOS
+    can deliver those reports in small bursts, so timestamping every report at
+    its host-arrival time injects several milliseconds of artificial beat-time
+    jitter. This clock follows packet-counter progression, reserves time for
+    missing reports, and slowly estimates each connected module's actual sample
+    rate from long-run packet delivery while starting from HeartMath's 370 Hz
+    nominal rate.
+    """
+
+    def __init__(
+        self,
+        nominal_rate: float = EMWAVE_NOMINAL_SAMPLE_RATE,
+        samples_per_report: int = EMWAVE_SAMPLES_PER_REPORT,
+    ) -> None:
+        self.nominal_rate = float(nominal_rate)
+        self.samples_per_report = int(samples_per_report)
+        self.sample_rate_hz = float(nominal_rate)
+        self.last_end_t: float | None = None
+        self.packet_index = 0
+        self.clock_resets = 0
+        self.rate_points = deque(maxlen=EMWAVE_RATE_ESTIMATE_WINDOW)
+        self.last_rate_update_packet = 0
+
+    def reset(self) -> None:
+        self.sample_rate_hz = self.nominal_rate
+        self.last_end_t = None
+        self.packet_index = 0
+        self.rate_points.clear()
+        self.last_rate_update_packet = 0
+
+    def _update_rate_estimate(self) -> None:
+        if len(self.rate_points) < 128:
+            return
+        if self.packet_index - self.last_rate_update_packet < 64:
+            return
+
+        first_arrival = self.rate_points[0][1]
+        last_arrival = self.rate_points[-1][1]
+        if last_arrival - first_arrival < 2.0:
+            return
+
+        mean_x = statistics.fmean(point[0] for point in self.rate_points)
+        mean_t = statistics.fmean(point[1] for point in self.rate_points)
+        denominator = sum((x - mean_x) ** 2 for x, _ in self.rate_points)
+        if denominator <= 0:
+            return
+        slope = sum(
+            (x - mean_x) * (t - mean_t)
+            for x, t in self.rate_points
+        ) / denominator
+        if slope <= 0:
+            return
+
+        observed_rate = self.samples_per_report / slope
+        if EMWAVE_RATE_MIN <= observed_rate <= EMWAVE_RATE_MAX:
+            # Long-window host timing is useful for correcting crystal/rate
+            # differences, but short USB scheduling bursts should not jerk the
+            # physiological clock around.
+            self.sample_rate_hz = (
+                0.85 * self.sample_rate_hz + 0.15 * observed_rate
+            )
+            self.last_rate_update_packet = self.packet_index
+
+    def packet_times(self, arrival_t: float, gap: int = 0) -> list[float]:
+        packet_steps = max(1, int(gap) + 1)
+        self.packet_index += packet_steps
+        arrival_t = float(arrival_t)
+        self.rate_points.append((self.packet_index, arrival_t))
+        self._update_rate_estimate()
+
+        sample_period = 1.0 / max(1.0, self.sample_rate_hz)
+        if self.last_end_t is None:
+            packet_end_t = arrival_t
+        else:
+            predicted_end = (
+                self.last_end_t
+                + packet_steps * self.samples_per_report * sample_period
+            )
+            arrival_error = arrival_t - predicted_end
+            if abs(arrival_error) > 0.35:
+                # Host sleep, a long stall, or a reconnect makes the old phase
+                # meaningless. Re-anchor rather than fabricating a long run of
+                # uniformly timed samples.
+                packet_end_t = arrival_t
+                self.clock_resets += 1
+                self.rate_points.clear()
+                self.packet_index = 0
+                self.rate_points.append((0, arrival_t))
+                self.last_rate_update_packet = 0
+            else:
+                # Correct phase very gently so independent devices stay aligned
+                # to the host clock without importing millisecond-scale USB
+                # scheduling jitter into beat timing.
+                correction = max(-0.0015, min(0.0015, arrival_error * 0.03))
+                packet_end_t = predicted_end + correction
+
+        self.last_end_t = packet_end_t
+        first_t = packet_end_t - (self.samples_per_report - 1) * sample_period
+        return [
+            first_t + index * sample_period
+            for index in range(self.samples_per_report)
+        ]
+
+
 class EmWaveParser:
     """Experimental parser based on captures from emWave USB 0x0E30:0x0002.
 
@@ -680,7 +792,10 @@ class EmWaveParser:
         return {
             "counter": counter,
             "gap": gap,
-            "samples": [int(value) & 0xFF for value in report[2:8]],
+            "samples": [
+                int(value) & 0xFF
+                for value in report[2 : 2 + EMWAVE_SAMPLES_PER_REPORT]
+            ],
         }
 
 
@@ -849,6 +964,53 @@ def emwave_hid_paths() -> list[bytes]:
     return sorted(paths)
 
 
+def reconcile_emwave_slot_paths(
+    assignments: dict[int, bytes],
+    connected_paths: list[bytes],
+    max_units: int = 4,
+) -> tuple[dict[int, bytes], set[int]]:
+    """Keep identical emWave modules in stable session slots by HID path.
+
+    Removing emWave 1 must not silently rename emWave 2 as emWave 1. Existing
+    connected paths therefore keep their slots. A newly appearing path first
+    replaces a reservation whose old path is absent, then uses a never-assigned
+    slot. Replaced slots are returned so their physiological history can be
+    cleared instead of mixing two physical sensors under one label.
+    """
+
+    out = dict(assignments)
+    current = list(dict.fromkeys(bytes(path) for path in connected_paths))
+    current_set = set(current)
+    assigned_present = {
+        path for path in out.values()
+        if path in current_set
+    }
+    newcomers = [path for path in current if path not in assigned_present]
+    replaced: set[int] = set()
+
+    for path in newcomers:
+        missing_slots = [
+            unit_number
+            for unit_number in range(1, max_units + 1)
+            if unit_number in out and out[unit_number] not in current_set
+        ]
+        empty_slots = [
+            unit_number
+            for unit_number in range(1, max_units + 1)
+            if unit_number not in out
+        ]
+        candidates = missing_slots or empty_slots
+        if not candidates:
+            break
+        unit_number = candidates[0]
+        previous = out.get(unit_number)
+        out[unit_number] = path
+        if previous is not None and previous != path:
+            replaced.add(unit_number)
+
+    return out, replaced
+
+
 def hid_device_for_token(token: str) -> dict:
     for device in hid_device_list():
         if device["path_token"] == token:
@@ -869,6 +1031,77 @@ def test_hid_device(token: str) -> dict:
     return {"opened": True, "device": meta}
 
 
+def emwave_capture_diagnostics(capture: dict) -> list[str]:
+    device = capture.get("device") or {}
+    if (
+        int(device.get("vendor_id") or 0) != EMWAVE_VENDOR_ID
+        or int(device.get("product_id") or 0) != EMWAVE_PRODUCT_ID
+    ):
+        return []
+
+    reports = [
+        report
+        for report in capture.get("reports", [])
+        if len(report.get("bytes") or []) >= 8
+        and int(report["bytes"][0]) == 0x01
+    ]
+    if not reports:
+        return ["emWave framing: no valid 8-byte 0x01 reports found"]
+
+    parser = EmWaveParser()
+    gaps = 0
+    samples: list[int] = []
+    for report in reports:
+        parsed = parser.feed_report(report["bytes"])
+        if parsed is None:
+            continue
+        gaps += int(parsed.get("gap") or 0)
+        samples.extend(parsed["samples"])
+
+    intervals = [
+        float(second["t"]) - float(first["t"])
+        for first, second in zip(reports, reports[1:])
+        if float(second["t"]) > float(first["t"])
+    ]
+    duration = float(capture.get("duration_s") or 0.0)
+    observed_delivery = (
+        len(samples) / duration
+        if duration > 0
+        else 0.0
+    )
+
+    lines = [
+        (
+            "emWave framing: "
+            f"{len(reports)} valid reports × {EMWAVE_SAMPLES_PER_REPORT} "
+            "consecutive waveform samples/report"
+        ),
+        f"Counter gaps: {gaps}",
+    ]
+    if intervals:
+        lines.append(
+            "Host report timing: median "
+            f"{statistics.median(intervals) * 1000.0:.3f} ms; "
+            f"longest {max(intervals) * 1000.0:.3f} ms"
+        )
+    lines.append(
+        "Host-observed waveform delivery: "
+        f"{observed_delivery:.1f} samples/s "
+        f"(nominal device rate {EMWAVE_NOMINAL_SAMPLE_RATE:.0f} Hz)"
+    )
+    if samples:
+        near_top = 100.0 * sum(value >= 250 for value in samples) / len(samples)
+        lines.append(
+            f"Raw waveform range: {min(samples)}–{max(samples)}; "
+            f"samples ≥250: {near_top:.1f}%"
+        )
+    lines.append(
+        "Timing note: USB arrival can be bursty; live acquisition reconstructs "
+        "sample time from packet order rather than treating host arrival as the sensor clock."
+    )
+    return lines
+
+
 def capture_summary(capture: dict, max_lines: int = 250) -> str:
     device = capture["device"]
     lines = [
@@ -879,9 +1112,14 @@ def capture_summary(capture: dict, max_lines: int = 250) -> str:
         f"Usage page / usage: 0x{device['usage_page']:04x} / {device['usage']}",
         f"Duration: {capture['duration_s']:.3f} s",
         f"Reports received: {len(capture['reports'])}",
+    ]
+    diagnostics = emwave_capture_diagnostics(capture)
+    if diagnostics:
+        lines.extend([""] + diagnostics)
+    lines.extend([
         "",
         "time_s    hex bytes                                              ASCII",
-    ]
+    ])
 
     for report in capture["reports"][:max_lines]:
         lines.append(
@@ -987,6 +1225,7 @@ class BiofeedbackState:
         self.shutdown = False
         self.last_error = ""
         self.seq = 0
+        self.started_unix = time.time()
         self.started_monotonic = time.monotonic()
         self.samples = deque(maxlen=5000)
 
@@ -1010,8 +1249,10 @@ class BiofeedbackState:
         self.emwave_seq = 0
         self.emwave_packet_count = 0
         self.emwave_gap_count = 0
+        self.emwave_generation = 0
         self.emwave_samples = deque(maxlen=36000)
         self.emwave_parser = EmWaveParser()
+        self.emwave_clock = EmWaveSampleClock()
 
         self.emwave_extra_units = {}
         for unit_number in range(2, 5):
@@ -1024,8 +1265,10 @@ class BiofeedbackState:
                 "seq": 0,
                 "packet_count": 0,
                 "gap_count": 0,
+                "generation": 0,
                 "samples": deque(maxlen=36000),
                 "parser": EmWaveParser(),
+                "clock": EmWaveSampleClock(),
             }
             self.emwave_extra_units[unit_number] = runtime
 
@@ -1223,6 +1466,8 @@ class BiofeedbackState:
                 "emwave_sample_count": self.emwave_seq,
                 "emwave_packet_count": self.emwave_packet_count,
                 "emwave_gap_count": self.emwave_gap_count,
+                "emwave_sample_rate_hz": self.emwave_clock.sample_rate_hz,
+                "emwave_clock_resets": self.emwave_clock.clock_resets,
                 "muse_running": self.muse_running,
                 "muse_connected": (
                     self.muse_connected
@@ -1275,6 +1520,11 @@ class BiofeedbackState:
                     "sample_count": self.emwave_seq,
                     "packet_count": self.emwave_packet_count,
                     "packet_gaps": self.emwave_gap_count,
+                    "generation": self.emwave_generation,
+                    "estimated_sample_rate_hz": round(
+                        self.emwave_clock.sample_rate_hz, 2
+                    ),
+                    "clock_resets": self.emwave_clock.clock_resets,
                 },
                 "muse": {
                     "connected": (
@@ -1333,6 +1583,11 @@ class BiofeedbackState:
                     "sample_count": runtime["seq"],
                     "packet_count": runtime["packet_count"],
                     "packet_gaps": runtime["gap_count"],
+                    "generation": runtime["generation"],
+                    "estimated_sample_rate_hz": round(
+                        runtime["clock"].sample_rate_hz, 2
+                    ),
+                    "clock_resets": runtime["clock"].clock_resets,
                     "seen": runtime["seen"],
                 }
 
@@ -1388,6 +1643,10 @@ class BiofeedbackState:
                 for req in required
                 if req in devices
             ]
+            source_generation = "|".join(
+                f"{req}:{devices.get(req, {}).get('generation', 0)}"
+                for req in required
+            )
 
             signals.append(
                 {
@@ -1395,11 +1654,14 @@ class BiofeedbackState:
                     **definition,
                     "device_name": definition.get("source_name") or device["name"],
                     "data_sources": data_sources,
+                    "source_generation": source_generation,
                     "connected": connected,
                     "running": running,
                     "device_error": device["error"],
                     "sample_count": sample_count,
                     "packet_gaps": device.get("packet_gaps"),
+                    "estimated_sample_rate_hz": device.get("estimated_sample_rate_hz"),
+                    "clock_resets": device.get("clock_resets"),
                     "battery": device.get("battery"),
                     "afe_gain": device.get("afe_gain"),
                 }
@@ -1861,9 +2123,48 @@ class BiofeedbackState:
             self.muse_passive_probe = status.passive_probe
             self.muse_afe_gain = status.afe_gain
 
+    def _reset_emwave_slot_history(self, unit_number: int) -> None:
+        """Clear data when a session slot is reassigned to a different device path."""
+
+        device_id = emwave_device_id(unit_number)
+        with self.lock:
+            if unit_number == 1:
+                self.emwave_seq = 0
+                self.emwave_packet_count = 0
+                self.emwave_gap_count = 0
+                self.emwave_generation += 1
+                self.emwave_samples.clear()
+                self.emwave_parser = EmWaveParser()
+                self.emwave_clock.reset()
+            else:
+                runtime = self.emwave_extra_units.get(unit_number)
+                if runtime is None:
+                    return
+                runtime["seq"] = 0
+                runtime["packet_count"] = 0
+                runtime["gap_count"] = 0
+                runtime["generation"] += 1
+                runtime["samples"].clear()
+                runtime["parser"] = EmWaveParser()
+                runtime["clock"].reset()
+
+            # A slot name is a session identity, not a permanent physical
+            # identity. If a different HID path takes the slot, old derived
+            # physiology and pair comparisons must not bleed into the new unit.
+            if hasattr(self, "derived_samples"):
+                for signal_id, definition in SIGNAL_DEFINITIONS.items():
+                    required = definition.get("requires_devices") or [
+                        definition.get("device_id")
+                    ]
+                    if device_id not in required:
+                        continue
+                    history = self.derived_samples.get(signal_id)
+                    if history is not None:
+                        history.clear()
+                        self.derived_seq[signal_id] = 0
+
     def _store_emwave_packet(self, parsed: dict, unit_number: int = 1) -> None:
-        packet_time = time.monotonic() - self.started_monotonic
-        sample_period = 1.0 / EMWAVE_NOMINAL_SAMPLE_RATE
+        arrival_t = time.monotonic() - self.started_monotonic
         device_id = emwave_device_id(unit_number)
         signal_id = f"{device_id}.pulse_raw"
         osc_path = f"{emwave_osc_prefix(unit_number)}/pulse_raw"
@@ -1873,11 +2174,14 @@ class BiofeedbackState:
                 self.emwave_packet_count += 1
                 self.emwave_gap_count += int(parsed.get("gap") or 0)
                 values = parsed["samples"]
-                for index, value in enumerate(values):
+                sample_times = self.emwave_clock.packet_times(
+                    arrival_t, int(parsed.get("gap") or 0)
+                )
+                for sample_t, value in zip(sample_times, values):
                     self.emwave_seq += 1
                     sample = {
                         "seq": self.emwave_seq,
-                        "t": packet_time - (len(values) - 1 - index) * sample_period,
+                        "t": sample_t,
                         "pulse": int(value),
                         "packet": int(parsed["counter"]),
                     }
@@ -1886,8 +2190,8 @@ class BiofeedbackState:
                     if self.recording and self.recording_writer:
                         self.recording_writer.writerow(
                             [
-                                f"{time.time():.6f}",
-                                f"{sample['t']:.6f}",
+                                f"{self.started_unix + sample_t:.6f}",
+                                f"{sample_t:.6f}",
                                 device_id,
                                 signal_id,
                                 int(value),
@@ -1903,7 +2207,11 @@ class BiofeedbackState:
                         except OSError as exc:
                             self.emwave_last_error = "OSC: " + str(exc)
 
-                if self.recording and self.recording_file and self.emwave_packet_count % 10 == 0:
+                if (
+                    self.recording
+                    and self.recording_file
+                    and self.emwave_packet_count % 10 == 0
+                ):
                     self.recording_file.flush()
                 return
 
@@ -1913,11 +2221,14 @@ class BiofeedbackState:
             runtime["packet_count"] += 1
             runtime["gap_count"] += int(parsed.get("gap") or 0)
             values = parsed["samples"]
-            for index, value in enumerate(values):
+            sample_times = runtime["clock"].packet_times(
+                arrival_t, int(parsed.get("gap") or 0)
+            )
+            for sample_t, value in zip(sample_times, values):
                 runtime["seq"] += 1
                 sample = {
                     "seq": runtime["seq"],
-                    "t": packet_time - (len(values) - 1 - index) * sample_period,
+                    "t": sample_t,
                     "pulse": int(value),
                     "packet": int(parsed["counter"]),
                 }
@@ -1926,8 +2237,8 @@ class BiofeedbackState:
                 if self.recording and self.recording_writer:
                     self.recording_writer.writerow(
                         [
-                            f"{time.time():.6f}",
-                            f"{sample['t']:.6f}",
+                            f"{self.started_unix + sample_t:.6f}",
+                            f"{sample_t:.6f}",
                             device_id,
                             signal_id,
                             int(value),
@@ -1943,7 +2254,11 @@ class BiofeedbackState:
                     except OSError as exc:
                         runtime["error"] = "OSC: " + str(exc)
 
-            if self.recording and self.recording_file and runtime["packet_count"] % 10 == 0:
+            if (
+                self.recording
+                and self.recording_file
+                and runtime["packet_count"] % 10 == 0
+            ):
                 self.recording_file.flush()
 
     def _store_sample(self, skin: int, pulse: int) -> None:
@@ -2134,6 +2449,7 @@ class BiofeedbackState:
 
         devices: dict[int, hid.device] = {}
         active_paths: dict[int, bytes] = {}
+        slot_paths: dict[int, bytes] = {}
         next_scan = 0.0
 
         def runtime_for(unit_number: int):
@@ -2163,12 +2479,14 @@ class BiofeedbackState:
                     self.emwave_connected = True
                     self.emwave_last_error = ""
                     self.emwave_parser = EmWaveParser()
+                    self.emwave_clock.reset()
                 else:
                     runtime = self.emwave_extra_units[unit_number]
                     runtime["connected"] = True
                     runtime["seen"] = True
                     runtime["error"] = ""
                     runtime["parser"] = EmWaveParser()
+                    runtime["clock"].reset()
 
         def close_unit(unit_number: int) -> None:
             device = devices.pop(unit_number, None)
@@ -2194,12 +2512,23 @@ class BiofeedbackState:
                     continue
 
                 next_scan = now + 1.0
+                slot_paths, replaced_slots = reconcile_emwave_slot_paths(
+                    slot_paths, paths
+                )
+                for unit_number in sorted(replaced_slots):
+                    if unit_number in devices:
+                        close_unit(unit_number)
+                    self._reset_emwave_slot_history(unit_number)
 
+                connected_paths = set(paths)
                 for unit_number in range(1, 5):
-                    path_index = unit_number - 1
+                    assigned_path = slot_paths.get(unit_number)
                     wanted_path = (
-                        paths[path_index]
-                        if should_run(unit_number) and path_index < len(paths)
+                        assigned_path
+                        if (
+                            should_run(unit_number)
+                            and assigned_path in connected_paths
+                        )
                         else None
                     )
 
@@ -3658,14 +3987,24 @@ document.getElementById("cameraGain").oninput = function() {
 
 
 function ensureSignalState(signal) {
+  const generation = String(signal.source_generation || "");
   if (!signalState[signal.id]) {
     signalState[signal.id] = {
       seq: 0,
       values: [],
       times: [],
       audioOn: false,
-      audioNode: null
+      audioNode: null,
+      generation: generation
     };
+  } else if (signalState[signal.id].generation !== generation) {
+    // A different physical sensor took this session slot. Reset the browser's
+    // local graph cursor too, otherwise its old high sequence number would
+    // suppress the new slot history after the server resets to sequence zero.
+    signalState[signal.id].seq = 0;
+    signalState[signal.id].values = [];
+    signalState[signal.id].times = [];
+    signalState[signal.id].generation = generation;
   }
   return signalState[signal.id];
 }
@@ -3983,8 +4322,24 @@ function updateSignalPanels(signals) {
       Number(signal.sample_count || 0).toLocaleString();
 
     const extra = document.getElementById("extra_" + id);
-    if (signal.packet_gaps != null) {
-      extra.innerHTML = '<strong>Packet gaps:</strong> ' + escapeHtml(signal.packet_gaps);
+    if (!signal.derived && signal.packet_gaps != null) {
+      const details = [
+        '<strong>Packet gaps:</strong> ' + escapeHtml(signal.packet_gaps)
+      ];
+      if (signal.estimated_sample_rate_hz != null) {
+        details.push(
+          '<strong>Waveform rate:</strong> ' +
+          escapeHtml(Number(signal.estimated_sample_rate_hz).toFixed(1)) +
+          ' samples/s'
+        );
+      }
+      if (Number(signal.clock_resets || 0) > 0) {
+        details.push(
+          '<strong>Timing re-anchors:</strong> ' +
+          escapeHtml(signal.clock_resets)
+        );
+      }
+      extra.innerHTML = details.join(' · ');
     } else {
       extra.textContent = "";
     }
@@ -4139,6 +4494,15 @@ function renderDeviceSetup(devices) {
           '<div><strong>Hardware ID:</strong> <span class="mono">' + escapeHtml(device.usb_id) + '</span></div>' +
           '<div><strong>Samples received:</strong> ' + Number(device.sample_count || 0).toLocaleString() + '</div>' +
           (device.packet_gaps != null ? '<div><strong>Packet gaps:</strong> ' + escapeHtml(device.packet_gaps) + '</div>' : '') +
+          (device.estimated_sample_rate_hz != null
+            ? '<div><strong>Estimated waveform rate:</strong> ' +
+              escapeHtml(Number(device.estimated_sample_rate_hz).toFixed(1)) +
+              ' samples/s</div>'
+            : '') +
+          (Number(device.clock_resets || 0) > 0
+            ? '<div><strong>Timing re-anchors:</strong> ' +
+              escapeHtml(device.clock_resets) + '</div>'
+            : '') +
           (device.error ? '<div style="color:#ff9b9b"><strong>Error:</strong> ' + escapeHtml(device.error) + '</div>' : '') +
         '</div>' +
         '<div class="device-signals">' + signals + '</div>' +
@@ -4368,13 +4732,28 @@ function updateSignalNumbers(signal) {
 }
 
 function pollSignals() {
-  visibleSignals(catalog.signals).forEach(function(signal) {
-    if (!(signal.connected && signal.running)) return;
-    const state = ensureSignalState(signal);
-    fetch("/api/signal_samples?id=" + encodeURIComponent(signal.id) + "&after=" + state.seq)
-      .then(r => r.json())
-      .then(function(data) {
-        (data.samples || []).forEach(function(sample) {
+  const signals = visibleSignals(catalog.signals).filter(function(signal) {
+    return signal.connected && signal.running;
+  });
+  if (!signals.length) return;
+
+  const after = {};
+  signals.forEach(function(signal) {
+    after[signal.id] = ensureSignalState(signal).seq;
+  });
+
+  fetch("/api/signal_samples_batch", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({after: after})
+  })
+    .then(r => r.json())
+    .then(function(data) {
+      const samplesBySignal = data.samples || {};
+      signals.forEach(function(signal) {
+        const state = ensureSignalState(signal);
+        const samples = samplesBySignal[signal.id] || [];
+        samples.forEach(function(sample) {
           state.seq = Math.max(state.seq, sample.seq);
           state.values.push(sample.value);
           state.times.push(sample.t);
@@ -4384,15 +4763,15 @@ function pollSignals() {
           state.values.splice(0, state.values.length - maxPoints);
           state.times.splice(0, state.times.length - maxPoints);
         }
-        if ((data.samples || []).length) {
+        if (samples.length) {
           updateSignalNumbers(signal);
           drawSignal(signal);
         }
-      })
-      .catch(function(err) {
-        document.getElementById("error").textContent = String(err);
       });
-  });
+    })
+    .catch(function(err) {
+      document.getElementById("error").textContent = String(err);
+    });
 }
 
 function getAudioContext() {
@@ -4695,13 +5074,34 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self) -> None:
-        if self.path != "/api/control":
-            self.send_error(404)
-            return
-
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length) or b"{}")
+
+            if self.path == "/api/signal_samples_batch":
+                after = payload.get("after") or {}
+                if not isinstance(after, dict):
+                    self.send_json(
+                        {"ok": False, "error": "after must be an object"},
+                        400,
+                    )
+                    return
+                samples = {}
+                for signal_id, seq in list(after.items())[:128]:
+                    try:
+                        cursor = int(seq)
+                    except (TypeError, ValueError):
+                        cursor = 0
+                    samples[str(signal_id)] = STATE.signal_samples_after(
+                        str(signal_id), cursor
+                    )
+                self.send_json({"ok": True, "samples": samples})
+                return
+
+            if self.path != "/api/control":
+                self.send_error(404)
+                return
+
             action = payload.get("action")
 
             if action == "device_start":

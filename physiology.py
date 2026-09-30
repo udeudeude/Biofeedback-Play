@@ -5,6 +5,9 @@ import statistics
 from typing import Iterable
 
 
+MIN_HRV_BEAT_CONFIDENCE_PERCENT = 60.0
+
+
 def _percentile(values: list[float], fraction: float) -> float:
     if not values:
         return 0.0
@@ -217,17 +220,24 @@ def pulse_metrics(points: Iterable[tuple[float, float]]) -> dict[str, float | No
     if not plausible:
         return result
 
-    recent_intervals = plausible[-7:]
-    median_interval = statistics.median(recent_intervals)
-    result["heart_rate_bpm"] = 60.0 / median_interval
-    result["ibi_ms"] = plausible[-1] * 1000.0
+    # Do not silently skip a bad most-recent interval and present an older beat
+    # as though it were current. Heart rate and IBI use the clean run ending at
+    # the newest detected beat. One bad/missed beat therefore makes those
+    # values briefly unavailable until clean timing resumes.
+    clean_start = len(intervals_s)
+    while (
+        clean_start > 0
+        and 0.30 <= intervals_s[clean_start - 1] <= 2.0
+    ):
+        clean_start -= 1
+    clean_intervals = intervals_s[clean_start:]
 
-    intervals_ms = [x * 1000.0 for x in plausible]
-    if len(intervals_ms) >= 3:
-        successive = [b - a for a, b in zip(intervals_ms, intervals_ms[1:])]
-        result["rmssd_ms"] = math.sqrt(statistics.fmean([x * x for x in successive]))
-        result["sdnn_ms"] = statistics.stdev(intervals_ms) if len(intervals_ms) >= 2 else 0.0
-        result["pnn50_percent"] = 100.0 * sum(abs(x) > 50.0 for x in successive) / len(successive)
+    if clean_intervals:
+        result["ibi_ms"] = clean_intervals[-1] * 1000.0
+    if len(clean_intervals) >= 2:
+        recent_intervals = clean_intervals[-7:]
+        median_interval = statistics.median(recent_intervals)
+        result["heart_rate_bpm"] = 60.0 / median_interval
 
     plausibility = len(plausible) / max(1, len(intervals_s))
     recent = plausible[-10:]
@@ -236,9 +246,40 @@ def pulse_metrics(points: Iterable[tuple[float, float]]) -> dict[str, float | No
     regularity = max(0.0, min(1.0, 1.0 - mad / max(0.12, med)))
     amplitude = result["pulse_amplitude"] or 0.0
     amplitude_factor = 1.0 if amplitude > 4.0 else max(0.0, amplitude / 4.0)
-    result["beat_confidence_percent"] = 100.0 * plausibility * (0.55 + 0.45 * regularity) * amplitude_factor
+    result["beat_confidence_percent"] = (
+        100.0
+        * plausibility
+        * (0.55 + 0.45 * regularity)
+        * amplitude_factor
+    )
 
-    spectrum, duration = _hrv_spectrum(peaks)
+    # Advanced beat-to-beat metrics are much easier to make plausible-looking
+    # than trustworthy. Require a continuous clean interval run and a strong
+    # beat-confidence score instead of dropping bad intervals from the middle
+    # and stitching the remaining ones together.
+    if (
+        result["beat_confidence_percent"] is None
+        or result["beat_confidence_percent"] < MIN_HRV_BEAT_CONFIDENCE_PERCENT
+        or len(clean_intervals) < 3
+    ):
+        return result
+
+    intervals_ms = [x * 1000.0 for x in clean_intervals]
+    successive = [b - a for a, b in zip(intervals_ms, intervals_ms[1:])]
+    result["rmssd_ms"] = math.sqrt(
+        statistics.fmean([x * x for x in successive])
+    )
+    result["sdnn_ms"] = (
+        statistics.stdev(intervals_ms) if len(intervals_ms) >= 2 else 0.0
+    )
+    result["pnn50_percent"] = (
+        100.0
+        * sum(abs(x) > 50.0 for x in successive)
+        / len(successive)
+    )
+
+    clean_peaks = peaks[clean_start:]
+    spectrum, duration = _hrv_spectrum(clean_peaks)
     if spectrum and duration is not None:
         coherence_band = {f: p for f, p in spectrum.items() if 0.04 <= f <= 0.26}
         if coherence_band:
@@ -527,13 +568,26 @@ def pair_metrics(
 
     ma = pulse_metrics(a)
     mb = pulse_metrics(b)
-    if ma["heart_rate_bpm"] is not None and mb["heart_rate_bpm"] is not None:
-        result["heart_rate_difference_bpm"] = abs(float(ma["heart_rate_bpm"]) - float(mb["heart_rate_bpm"]))
 
     amp_a = ma.get("pulse_amplitude")
     amp_b = mb.get("pulse_amplitude")
     if amp_a is not None and amp_b is not None and float(amp_b) > 1e-9:
         result["amplitude_ratio"] = float(amp_a) / float(amp_b)
+
+    confidence_a = float(ma.get("beat_confidence_percent") or 0.0)
+    confidence_b = float(mb.get("beat_confidence_percent") or 0.0)
+    beat_quality_ok = (
+        confidence_a >= MIN_HRV_BEAT_CONFIDENCE_PERCENT
+        and confidence_b >= MIN_HRV_BEAT_CONFIDENCE_PERCENT
+        and ma["heart_rate_bpm"] is not None
+        and mb["heart_rate_bpm"] is not None
+    )
+    if not beat_quality_ok:
+        return result
+
+    result["heart_rate_difference_bpm"] = abs(
+        float(ma["heart_rate_bpm"]) - float(mb["heart_rate_bpm"])
+    )
 
     peaks_a = detect_pulse_peaks(a)
     peaks_b = detect_pulse_peaks(b)

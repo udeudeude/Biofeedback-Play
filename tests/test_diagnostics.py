@@ -2,12 +2,14 @@ import unittest
 
 from biofeedback_play import (
     EmWaveParser,
+    EmWaveSampleClock,
     HTML,
     DEVICE_DEFINITIONS,
     SIGNAL_DEFINITIONS,
     capture_summary,
     emwave_device_id,
     hid_is_obviously_unrelated,
+    reconcile_emwave_slot_paths,
 )
 
 
@@ -21,6 +23,65 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual(first["gap"], 0)
         self.assertEqual(second["gap"], 0)
 
+    def test_emwave_counter_wrap_and_gap_detection(self):
+        parser = EmWaveParser()
+        self.assertEqual(
+            parser.feed_report([0x01, 0xFF, 1, 2, 3, 4, 5, 6])["gap"],
+            0,
+        )
+        self.assertEqual(
+            parser.feed_report([0x01, 0x00, 7, 8, 9, 10, 11, 12])["gap"],
+            0,
+        )
+        self.assertEqual(
+            parser.feed_report([0x01, 0x02, 13, 14, 15, 16, 17, 18])["gap"],
+            1,
+        )
+
+    def test_emwave_sample_clock_rejects_short_usb_delivery_jitter(self):
+        clock = EmWaveSampleClock()
+        first = clock.packet_times(0.016, gap=0)
+        second = clock.packet_times(0.048, gap=0)
+        self.assertEqual(len(first), 6)
+        self.assertEqual(len(second), 6)
+        self.assertLess(second[-1], 0.036)
+
+        third = clock.packet_times(0.064, gap=1)
+        self.assertAlmostEqual(
+            third[-1] - second[-1],
+            12.0 / clock.sample_rate_hz,
+            delta=0.002,
+        )
+
+    def test_emwave_sample_clock_can_learn_long_run_rate(self):
+        clock = EmWaveSampleClock()
+        report_period = 6.0 / 375.0
+        jitter = (0.0, 0.0015, -0.0007, 0.0004, -0.0010)
+        for index in range(720):
+            arrival = (index + 1) * report_period + jitter[index % len(jitter)]
+            clock.packet_times(arrival, gap=0)
+        self.assertGreater(clock.sample_rate_hz, 373.0)
+        self.assertLess(clock.sample_rate_hz, 377.0)
+
+    def test_emwave_slots_do_not_shift_when_identical_sensor_is_unplugged(self):
+        first = b"path-A"
+        second = b"path-B"
+        third = b"path-C"
+        assignments, replaced = reconcile_emwave_slot_paths({}, [first, second])
+        self.assertEqual(assignments, {1: first, 2: second})
+        self.assertEqual(replaced, set())
+
+        assignments, replaced = reconcile_emwave_slot_paths(assignments, [second])
+        self.assertEqual(assignments[2], second)
+        self.assertEqual(assignments[1], first)
+        self.assertEqual(replaced, set())
+
+        assignments, replaced = reconcile_emwave_slot_paths(
+            assignments, [second, third]
+        )
+        self.assertEqual(assignments[2], second)
+        self.assertEqual(assignments[1], third)
+        self.assertEqual(replaced, {1})
 
     def test_capture_summary_formats_reports(self):
         capture = {
@@ -28,21 +89,37 @@ class DiagnosticsTests(unittest.TestCase):
                 "known": "HeartMath emWave Pulse Sensor",
                 "product": "emWave Pulse Sensor",
                 "manufacturer": "QUANTUM INTECH",
+                "vendor_id": 0x0E30,
+                "product_id": 0x0002,
                 "vendor_hex": "0x0e30",
                 "product_hex": "0x0002",
                 "usage_page": 0xFF00,
                 "usage": 1,
             },
-            "duration_s": 1.25,
+            "duration_s": 0.032,
             "reports": [
-                {"t": 0.1, "hex": "01 02 41", "ascii": "..A"},
+                {
+                    "t": 0.016,
+                    "bytes": [0x01, 0x02, 60, 61, 62, 63, 64, 65],
+                    "hex": "01 02 3C 3D 3E 3F 40 41",
+                    "ascii": "..<=>?@A",
+                },
+                {
+                    "t": 0.032,
+                    "bytes": [0x01, 0x03, 66, 67, 68, 69, 70, 71],
+                    "hex": "01 03 42 43 44 45 46 47",
+                    "ascii": "..BCDEFG",
+                },
             ],
         }
 
         text = capture_summary(capture)
         self.assertIn("HeartMath emWave Pulse Sensor", text)
         self.assertIn("0x0e30 / 0x0002", text)
-        self.assertIn("01 02 41", text)
+        self.assertIn("01 02 3C 3D 3E 3F 40 41", text)
+        self.assertIn("6 consecutive waveform samples/report", text)
+        self.assertIn("Counter gaps: 0", text)
+        self.assertIn("Host report timing", text)
 
 
     def test_known_biofeedback_device_is_never_hidden(self):
@@ -113,6 +190,10 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("kind-badge", HTML)
         self.assertIn("source-chip", HTML)
 
+    def test_live_signal_polling_is_batched(self):
+        self.assertIn("/api/signal_samples_batch", HTML)
+        self.assertNotIn('fetch("/api/signal_samples?id="', HTML)
+
     def test_use_tab_only_shows_enabled_live_signals(self):
         self.assertIn("Only live signals from enabled device views appear below.", HTML)
         self.assertIn("signal.connected && signal.running && signalViewEnabled(signal)", HTML)
@@ -137,9 +218,16 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn('classList.remove("active")', HTML)
         self.assertIn("cameraQualityValue", HTML)
         self.assertIn("Heartbeat-band color magnification", HTML)
-        self.assertIn("POS-style RGB combination", HTML)
+        self.assertIn(
+            "POS-style",
+            SIGNAL_DEFINITIONS["camera.ppg_raw"]["description"],
+        )
         self.assertIn("cameraPosPulse", HTML)
         self.assertIn('action: action', HTML)
+        self.assertIn("Waveform rate:", HTML)
+        self.assertIn("Estimated waveform rate:", HTML)
+        self.assertIn("source_generation", HTML)
+        self.assertIn("generation !== generation", HTML)
 
 
 if __name__ == "__main__":
