@@ -1325,16 +1325,16 @@ class BiofeedbackState:
                 },
             }
             for unit_number, runtime in self.emwave_extra_units.items():
-                if runtime["seen"] or runtime["connected"]:
-                    device_id = emwave_device_id(unit_number)
-                    status_by_device[device_id] = {
-                        "connected": runtime["connected"],
-                        "running": runtime["running"],
-                        "error": runtime["error"],
-                        "sample_count": runtime["seq"],
-                        "packet_count": runtime["packet_count"],
-                        "packet_gaps": runtime["gap_count"],
-                    }
+                device_id = emwave_device_id(unit_number)
+                status_by_device[device_id] = {
+                    "connected": runtime["connected"],
+                    "running": runtime["running"],
+                    "error": runtime["error"],
+                    "sample_count": runtime["seq"],
+                    "packet_count": runtime["packet_count"],
+                    "packet_gaps": runtime["gap_count"],
+                    "seen": runtime["seen"],
+                }
 
             out = []
             for device_id, definition in DEVICE_DEFINITIONS.items():
@@ -2272,6 +2272,14 @@ HTML = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Biofeedback Play</title>
+<script>
+try {
+  document.documentElement.dataset.theme =
+    localStorage.getItem("biofeedbackPlay.theme.v1") || "dark";
+} catch (_) {
+  document.documentElement.dataset.theme = "dark";
+}
+</script>
 <style>
 :root {
   color-scheme: dark;
@@ -2287,6 +2295,80 @@ HTML = r"""<!doctype html>
   --accent2: #c4b5fd;
   --soft: rgba(255,255,255,.035);
 }
+html[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f2f4f8;
+  --panel: #ffffff;
+  --panel2: #e8ecf3;
+  --text: #171b24;
+  --muted: #606979;
+  --line: #c7ced9;
+  --good: #16834a;
+  --bad: #c74444;
+  --accent: #6254cf;
+  --accent2: #7668d9;
+  --soft: rgba(24,31,45,.045);
+}
+html[data-theme="light"] body {
+  background: radial-gradient(circle at 20% 0%, #ffffff, var(--bg) 48%);
+}
+html[data-theme="light"] .tabs,
+html[data-theme="light"] .card,
+html[data-theme="light"] .signal-panel {
+  background: rgba(255,255,255,.94);
+  box-shadow: 0 9px 26px rgba(45,55,75,.08);
+}
+html[data-theme="light"] .signal-device-section {
+  background: rgba(231,235,243,.72);
+}
+html[data-theme="light"] .device-section-header {
+  background: rgba(255,255,255,.92);
+}
+html[data-theme="light"] .signal-panel.direct,
+html[data-theme="light"] .signal-panel.calculated,
+html[data-theme="light"] .signal-panel.comparison,
+html[data-theme="light"] .device-card,
+html[data-theme="light"] .metric {
+  background: #ffffff;
+}
+html[data-theme="light"] .signal-meaning,
+html[data-theme="light"] .info-line strong,
+html[data-theme="light"] .device-section-counts {
+  color: #333b49;
+}
+html[data-theme="light"] input[type=text],
+html[data-theme="light"] input[type=number],
+html[data-theme="light"] select,
+html[data-theme="light"] #musePortScanStatus {
+  background: #ffffff !important;
+  color: var(--text);
+}
+html[data-theme="light"] canvas,
+html[data-theme="light"] .camera-view,
+html[data-theme="light"] .diag-output {
+  background: #eef1f6;
+}
+html[data-theme="light"] .camera-lab,
+html[data-theme="light"] .camera-lab.active,
+html[data-theme="light"] .signal-toolbar,
+html[data-theme="light"] .camera-note {
+  background: rgba(255,255,255,.86);
+}
+html[data-theme="light"] .camera-view-label {
+  background: rgba(255,255,255,.88);
+  color: #303746;
+}
+html[data-theme="light"] .filter-button.active {
+  color: var(--text);
+  background: #dde2eb;
+  border-color: #aeb7c6;
+}
+html[data-theme="light"] .kind-badge.direct { color: #176b3d; }
+html[data-theme="light"] .kind-badge.calculated { color: #5444aa; }
+html[data-theme="light"] .kind-badge.comparison { color: #805b12; }
+html[data-theme="light"] .source-chip { color: #3d4655; }
+html[data-theme="light"] .audio-note { color: #596273; }
+html[data-theme="light"] #error { color: #a42f2f; }
 * { box-sizing: border-box; }
 body {
   margin: 0;
@@ -2592,11 +2674,31 @@ canvas {
 #cameraVideo { display: none; }
 
 .signal-toolbar {
-  grid-column: span 12; display: flex; align-items: center; justify-content: space-between;
-  gap: 10px; flex-wrap: wrap; padding: 10px 12px;
+  grid-column: span 12; display: block; padding: 10px 12px;
   border: 1px solid var(--line); border-radius: 12px;
   background: rgba(21,24,33,.68);
 }
+.signal-toolbar-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+}
+.device-view-controls {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line);
+}
+.device-view-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+.device-view-button {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 9px; font-size: 12px; color: var(--muted);
+  background: transparent;
+}
+.device-view-button.enabled { color: var(--text); background: var(--soft); }
+.device-view-button .source-swatch { width: 9px; height: 9px; }
+.device-view-state { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+.device-view-button:not(.enabled) .device-view-state { color: var(--bad); }
+.device-view-button.enabled .device-view-state { color: var(--good); }
+.camera-lab.view-hidden { display: none; }
 .filter-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
 .filter-button { padding: 6px 10px; font-size: 12px; color: var(--muted); }
 .layout-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
@@ -2682,9 +2784,12 @@ canvas {
       <h1>Biofeedback Play</h1>
       <div class="subtitle">Live biosignal visual, audio, recording, and creative-control workspace</div>
     </div>
-    <div class="status-pill">
-      <span id="globalDot" class="dot"></span>
-      <span id="globalStatus">Checking devices...</span>
+    <div class="row">
+      <button id="themeToggle" aria-label="Switch color theme">Light mode</button>
+      <div class="status-pill">
+        <span id="globalDot" class="dot"></span>
+        <span id="globalStatus">Checking devices...</span>
+      </div>
     </div>
   </div>
 
@@ -2709,22 +2814,28 @@ canvas {
 
 
       <section class="signal-toolbar">
-        <div>
-          <div class="filter-buttons" aria-label="Signal panel filter">
-            <button class="filter-button active" data-signal-filter="all">Everything</button>
-            <button class="filter-button" data-signal-filter="direct">Direct sensor data</button>
-            <button class="filter-button" data-signal-filter="calculated">Derived</button>
-            <button class="filter-button" data-signal-filter="comparison">Comparisons</button>
+        <div class="signal-toolbar-row">
+          <div>
+            <div class="filter-buttons" aria-label="Signal panel filter">
+              <button class="filter-button active" data-signal-filter="all">Everything</button>
+              <button class="filter-button" data-signal-filter="direct">Direct sensor data</button>
+              <button class="filter-button" data-signal-filter="calculated">Derived</button>
+              <button class="filter-button" data-signal-filter="comparison">Comparisons</button>
+            </div>
+            <div class="layout-hint" style="margin-top:7px">Only live signals from enabled device views appear below.</div>
           </div>
-          <div class="layout-hint" style="margin-top:7px">Only live device signals appear here. Connection and troubleshooting controls live under Device setup.</div>
-        </div>
-        <div>
           <div class="legend" aria-label="Panel legend">
             <span class="legend-item"><span class="legend-mark"></span>Direct sensor data</span>
             <span class="legend-item"><span class="legend-mark calculated"></span>Derived</span>
             <span class="legend-item"><span class="legend-mark comparison"></span>Comparison</span>
           </div>
-
+        </div>
+        <div class="device-view-controls">
+          <div>
+            <div class="label">Device views</div>
+            <div class="layout-hint" style="margin-top:4px">Choose which devices may appear here, even while they are unplugged.</div>
+          </div>
+          <div id="deviceViewButtons" class="device-view-buttons"></div>
         </div>
       </section>
 
@@ -2865,6 +2976,8 @@ let musePorts = [];
 let musePortScanStatus = "Not scanned yet.";
 let audioContext = null;
 let signalFilter = "all";
+let deviceViewState = loadDeviceViewState();
+let deviceViewSignature = "";
 let panelOrder = loadPanelOrder();
 let draggedSignalId = null;
 let cameraStream = null;
@@ -2880,6 +2993,46 @@ let cameraLastPostAt = 0;
 let cameraLastSampleTimestamp = null;
 let cameraQualityHistory = [];
 let cameraRgbHistory = [];
+
+function loadDeviceViewState() {
+  try {
+    const raw = localStorage.getItem("biofeedbackPlay.deviceViews.v1");
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveDeviceViewState() {
+  try {
+    localStorage.setItem("biofeedbackPlay.deviceViews.v1", JSON.stringify(deviceViewState));
+  } catch (_) {}
+}
+
+function deviceViewEnabled(deviceId) {
+  return deviceViewState[deviceId] !== false;
+}
+
+function signalViewEnabled(signal) {
+  return signalSourceIds(signal).every(function(deviceId) {
+    return deviceViewEnabled(deviceId);
+  });
+}
+
+function setTheme(theme) {
+  const next = theme === "light" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try {
+    localStorage.setItem("biofeedbackPlay.theme.v1", next);
+  } catch (_) {}
+  const button = document.getElementById("themeToggle");
+  if (button) {
+    button.textContent = next === "light" ? "Dark mode" : "Light mode";
+    button.setAttribute("aria-label", next === "light" ? "Switch to dark mode" : "Switch to light mode");
+  }
+  requestAnimationFrame(drawAllSignals);
+}
 
 function loadPanelOrder() {
   try {
@@ -3013,7 +3166,7 @@ function storeVisiblePanelOrder(visibleIds) {
 
 function visibleSignals(signals) {
   const live = signals.filter(function(signal) {
-    return Boolean(signal.connected && signal.running);
+    return Boolean(signal.connected && signal.running && signalViewEnabled(signal));
   });
   const ordered = defaultSortedSignals(live);
   if (signalFilter === "all") return ordered;
@@ -3409,6 +3562,57 @@ function escapeHtml(value) {
     .replace(/"/g, "&quot;");
 }
 
+function renderDeviceViewControls(devices) {
+  const host = document.getElementById("deviceViewButtons");
+  if (!host) return;
+
+  const signature = devices.map(function(device) {
+    return [device.id, device.name, device.connected, device.running, deviceViewEnabled(device.id)].join(":");
+  }).join("|");
+  if (signature === deviceViewSignature) return;
+  deviceViewSignature = signature;
+
+  host.innerHTML = devices.map(function(device) {
+    const enabled = deviceViewEnabled(device.id);
+    const live = Boolean(device.connected && device.running);
+    return '<button class="device-view-button ' + (enabled ? 'enabled' : '') +
+      '" data-device-view="' + escapeHtml(device.id) + '" aria-pressed="' + String(enabled) + '">' +
+      '<span class="source-swatch" style="--source-color:' + escapeHtml(deviceColor(device.id)) + '"></span>' +
+      '<span>' + escapeHtml(device.name) + '</span>' +
+      '<span class="device-view-state">' + (enabled ? (live ? 'Live' : 'On') : 'Off') + '</span>' +
+      '</button>';
+  }).join("");
+
+  host.querySelectorAll("[data-device-view]").forEach(function(button) {
+    button.onclick = function() {
+      const deviceId = button.dataset.deviceView;
+      const enabled = !deviceViewEnabled(deviceId);
+      deviceViewState[deviceId] = enabled;
+      saveDeviceViewState();
+
+      if (deviceId === "camera" && !enabled && cameraStream) {
+        cameraStopLocal();
+      }
+
+      deviceViewSignature = "";
+      signalSignature = "";
+      renderDeviceViewControls(catalog.devices);
+      syncCameraViewVisibility();
+
+      const displayed = visibleSignals(catalog.signals);
+      renderSignalPanels(displayed);
+      updateSignalPanels(displayed);
+      requestAnimationFrame(drawAllSignals);
+    };
+  });
+}
+
+function syncCameraViewVisibility() {
+  const lab = document.getElementById("cameraLab");
+  if (!lab) return;
+  lab.classList.toggle("view-hidden", !deviceViewEnabled("camera"));
+}
+
 function switchTab(name) {
   document.querySelectorAll(".tab-button").forEach(function(button) {
     button.classList.toggle("active", button.dataset.tab === name);
@@ -3424,6 +3628,11 @@ function switchTab(name) {
 document.querySelectorAll(".tab-button").forEach(function(button) {
   button.onclick = function() { switchTab(button.dataset.tab); };
 });
+
+document.getElementById("themeToggle").onclick = function() {
+  setTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light");
+};
+setTheme(document.documentElement.dataset.theme || "dark");
 
 document.querySelectorAll("[data-signal-filter]").forEach(function(button) {
   button.onclick = function() {
@@ -3556,11 +3765,21 @@ function renderSignalCard(signal) {
 function renderSignalPanels(signals) {
   const grid = document.getElementById("signalGrid");
   if (!signals.length) {
+    const anyConnected = catalog.devices.some(function(device) {
+      return device.connected && device.running;
+    });
+    const anyEnabledConnected = catalog.devices.some(function(device) {
+      return device.connected && device.running && deviceViewEnabled(device.id);
+    });
+    let hint = "Connect a sensor, or start the optional Camera experiment below.";
+    if (anyConnected && !anyEnabledConnected) {
+      hint = "A device is connected, but its view is turned off. Use Device views above to show it.";
+    }
     grid.innerHTML =
       '<section class="signal-device-section" style="--device-accent:#68718a">' +
         '<div class="device-section-header">' +
           '<div><div class="device-section-name">No live device data</div>' +
-          '<div class="device-section-summary">Connect a sensor, or start the optional Camera experiment below.</div></div>' +
+          '<div class="device-section-summary">' + escapeHtml(hint) + '</div></div>' +
         '</div>' +
       '</section>';
     return;
@@ -4024,6 +4243,8 @@ function updateGlobalStatus() {
 
 function applyCatalog(data) {
   catalog = data;
+  renderDeviceViewControls(catalog.devices);
+  syncCameraViewVisibility();
   const displayed = visibleSignals(catalog.signals);
   const signature = displayed.map(function(s) {
     return s.id + ":" + Boolean(s.connected && s.running);
@@ -4145,7 +4366,7 @@ function updateSignalNumbers(signal) {
 }
 
 function pollSignals() {
-  catalog.signals.forEach(function(signal) {
+  visibleSignals(catalog.signals).forEach(function(signal) {
     if (!(signal.connected && signal.running)) return;
     const state = ensureSignalState(signal);
     fetch("/api/signal_samples?id=" + encodeURIComponent(signal.id) + "&after=" + state.seq)
