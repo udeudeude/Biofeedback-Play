@@ -4732,13 +4732,28 @@ function updateSignalNumbers(signal) {
 }
 
 function pollSignals() {
-  visibleSignals(catalog.signals).forEach(function(signal) {
-    if (!(signal.connected && signal.running)) return;
-    const state = ensureSignalState(signal);
-    fetch("/api/signal_samples?id=" + encodeURIComponent(signal.id) + "&after=" + state.seq)
-      .then(r => r.json())
-      .then(function(data) {
-        (data.samples || []).forEach(function(sample) {
+  const signals = visibleSignals(catalog.signals).filter(function(signal) {
+    return signal.connected && signal.running;
+  });
+  if (!signals.length) return;
+
+  const after = {};
+  signals.forEach(function(signal) {
+    after[signal.id] = ensureSignalState(signal).seq;
+  });
+
+  fetch("/api/signal_samples_batch", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({after: after})
+  })
+    .then(r => r.json())
+    .then(function(data) {
+      const samplesBySignal = data.samples || {};
+      signals.forEach(function(signal) {
+        const state = ensureSignalState(signal);
+        const samples = samplesBySignal[signal.id] || [];
+        samples.forEach(function(sample) {
           state.seq = Math.max(state.seq, sample.seq);
           state.values.push(sample.value);
           state.times.push(sample.t);
@@ -4748,15 +4763,15 @@ function pollSignals() {
           state.values.splice(0, state.values.length - maxPoints);
           state.times.splice(0, state.times.length - maxPoints);
         }
-        if ((data.samples || []).length) {
+        if (samples.length) {
           updateSignalNumbers(signal);
           drawSignal(signal);
         }
-      })
-      .catch(function(err) {
-        document.getElementById("error").textContent = String(err);
       });
-  });
+    })
+    .catch(function(err) {
+      document.getElementById("error").textContent = String(err);
+    });
 }
 
 function getAudioContext() {
@@ -5059,13 +5074,34 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self) -> None:
-        if self.path != "/api/control":
-            self.send_error(404)
-            return
-
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length) or b"{}")
+
+            if self.path == "/api/signal_samples_batch":
+                after = payload.get("after") or {}
+                if not isinstance(after, dict):
+                    self.send_json(
+                        {"ok": False, "error": "after must be an object"},
+                        400,
+                    )
+                    return
+                samples = {}
+                for signal_id, seq in list(after.items())[:128]:
+                    try:
+                        cursor = int(seq)
+                    except (TypeError, ValueError):
+                        cursor = 0
+                    samples[str(signal_id)] = STATE.signal_samples_after(
+                        str(signal_id), cursor
+                    )
+                self.send_json({"ok": True, "samples": samples})
+                return
+
+            if self.path != "/api/control":
+                self.send_error(404)
+                return
+
             action = payload.get("action")
 
             if action == "device_start":
