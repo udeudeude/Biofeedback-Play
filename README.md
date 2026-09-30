@@ -81,7 +81,7 @@ Observed emWave reports have the form:
 
 where CC behaves as an 8-bit packet counter and S0 through S5 behave as six consecutive waveform samples.
 
-A local capture produced about 371 samples/second. HeartMath documentation for emWave Pro Plus specifies a 370 Hz pulse-wave sample rate, so Biofeedback Play now uses 370 Hz as the nominal emWave rate.
+A local capture produced about 371 samples/second. HeartMath documentation for emWave Pro Plus specifies a 370 Hz pulse-wave sample rate, so Biofeedback Play uses 370 Hz as the nominal emWave rate. Live acquisition does not use USB report-arrival jitter as beat timing: it reconstructs sample time from the rolling packet counter and six-sample packet structure, slowly estimates each module's long-run rate, and reserves time for detected missing packets. Identical modules also keep stable HID-path session slots so unplugging one does not silently relabel another sensor.
 
 ### Muse 2014 / MU-01
 
@@ -112,7 +112,7 @@ For Lightstone and every connected emWave:
 - pulse amplitude
 - beat-detection confidence
 
-The coherence panels are open calculations based on the concentration of HRV spectral power around a dominant peak in the coherence range. They are not presented as HeartMath's proprietary emWave coherence score.
+The coherence panels are open calculations based on the concentration of HRV spectral power around a dominant peak in the coherence range. They are not presented as HeartMath's proprietary emWave coherence score. Advanced beat-to-beat metrics are withheld when beat confidence is low or the newest interval sequence contains a timing artifact; bad intervals are not silently discarded and stitched around.
 
 ### Skin-conductance panels
 
