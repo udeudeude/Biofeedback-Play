@@ -19,6 +19,39 @@ class PhysiologyTests(unittest.TestCase):
         self.assertIsNotNone(metrics["rmssd_ms"])
         self.assertIsNotNone(metrics["coherence_peak_percent"])
 
+    def test_low_amplitude_pulse_does_not_emit_advanced_hrv(self):
+        rate = 100.0
+        points = []
+        for i in range(int(rate * 70)):
+            t = i / rate
+            phase = t % 1.0
+            pulse = math.exp(-((phase - 0.15) / 0.045) ** 2) * 1.0
+            points.append((t, pulse))
+        metrics = pulse_metrics(points)
+        self.assertIsNotNone(metrics["heart_rate_bpm"])
+        self.assertLess(metrics["beat_confidence_percent"], 60.0)
+        self.assertIsNone(metrics["rmssd_ms"])
+        self.assertIsNone(metrics["sdnn_ms"])
+        self.assertIsNone(metrics["pnn50_percent"])
+        self.assertIsNone(metrics["coherence_ratio"])
+
+    def test_bad_latest_interval_is_not_replaced_by_stale_good_ibi(self):
+        rate = 100.0
+        beat_times = list(range(1, 21)) + [23.5]
+        points = []
+        for i in range(int(rate * 24)):
+            t = i / rate
+            pulse = sum(
+                math.exp(-((t - beat - 0.15) / 0.045) ** 2) * 100.0
+                for beat in beat_times
+                if abs(t - beat - 0.15) < 0.25
+            )
+            points.append((t, pulse))
+        metrics = pulse_metrics(points)
+        self.assertIsNone(metrics["ibi_ms"])
+        self.assertIsNone(metrics["heart_rate_bpm"])
+        self.assertIsNone(metrics["rmssd_ms"])
+
     def test_camera_pulse_metrics_estimates_clean_spectral_rate(self):
         rate = 30.0
         points = []
