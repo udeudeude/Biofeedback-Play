@@ -2941,6 +2941,8 @@ input.port { width: 90px; }
 .signal-panel.view-name .panel-view-toggle {
   min-width: 38px; padding: 4px 5px;
 }
+.signal-panel.view-mini.offline,
+.signal-panel.view-name.offline { display: none; }
 .kind-badge {
   display: inline-flex; align-items: center; gap: 5px;
   border: 1px solid var(--line); border-radius: 999px;
