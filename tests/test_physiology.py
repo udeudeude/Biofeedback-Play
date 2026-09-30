@@ -108,6 +108,21 @@ class PhysiologyTests(unittest.TestCase):
         self.assertEqual(motion_metrics(still)["motion_intensity"], 0.0)
         self.assertGreater(motion_metrics(moving)["motion_intensity"], 0.0)
 
+    def test_pair_metrics_withhold_beat_comparisons_for_weak_signals(self):
+        a = []
+        b = []
+        for i in range(6000):
+            t = i / 100.0
+            va = math.exp(-((((t % 1.0) - 0.15) / 0.05) ** 2)) * 1.0
+            vb = math.exp(-(((((t - 0.02) % 1.0) - 0.15) / 0.05) ** 2)) * 1.0
+            a.append((t, va))
+            b.append((t, vb))
+        metrics = pair_metrics(a, b)
+        self.assertIsNotNone(metrics["amplitude_ratio"])
+        self.assertIsNone(metrics["heart_rate_difference_bpm"])
+        self.assertIsNone(metrics["beat_offset_ms"])
+        self.assertIsNone(metrics["waveform_correlation"])
+
     def test_pair_metrics_compare_two_matching_pulses(self):
         a = []
         b = []
