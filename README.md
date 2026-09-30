@@ -28,9 +28,11 @@ Inside each device section:
 - Technical material such as recent range, sample count, OSC address, detailed definition, and nominal rate is tucked under **Details & technical information**.
 - Cross-device calculations live in their own **Cross-device comparisons** section rather than being mixed into the source-device groups.
 
-Disconnected devices remain available under **Device setup** instead of occupying the live workspace.
+Disconnected devices remain available under **Device setup** instead of occupying the live workspace. A persistent **Device views** row on the live page lets you turn each configured device's view on or off even while that device is unplugged; the preference is remembered in the browser. All four emWave slots are available there before connection.
 
-The optional camera experiment sits below the live signal groups and remains compact while off. Its full camera workspace appears only after the camera is started.
+The optional camera experiment sits below the live signal groups and remains compact while off. Its full camera workspace appears only after the camera is started. Turning the Camera view off also stops a running browser-camera session so it cannot consume processor time invisibly.
+
+The top bar includes a persistent **Light mode / Dark mode** switch. The selected theme is remembered in the browser.
 
 Each live panel has an independent **Audio** control. Audio is generated locally with the Web Audio API. It is sonification, not a reconstructed heartbeat or diagnostic sound.
 
