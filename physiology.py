@@ -568,13 +568,26 @@ def pair_metrics(
 
     ma = pulse_metrics(a)
     mb = pulse_metrics(b)
-    if ma["heart_rate_bpm"] is not None and mb["heart_rate_bpm"] is not None:
-        result["heart_rate_difference_bpm"] = abs(float(ma["heart_rate_bpm"]) - float(mb["heart_rate_bpm"]))
 
     amp_a = ma.get("pulse_amplitude")
     amp_b = mb.get("pulse_amplitude")
     if amp_a is not None and amp_b is not None and float(amp_b) > 1e-9:
         result["amplitude_ratio"] = float(amp_a) / float(amp_b)
+
+    confidence_a = float(ma.get("beat_confidence_percent") or 0.0)
+    confidence_b = float(mb.get("beat_confidence_percent") or 0.0)
+    beat_quality_ok = (
+        confidence_a >= MIN_HRV_BEAT_CONFIDENCE_PERCENT
+        and confidence_b >= MIN_HRV_BEAT_CONFIDENCE_PERCENT
+        and ma["heart_rate_bpm"] is not None
+        and mb["heart_rate_bpm"] is not None
+    )
+    if not beat_quality_ok:
+        return result
+
+    result["heart_rate_difference_bpm"] = abs(
+        float(ma["heart_rate_bpm"]) - float(mb["heart_rate_bpm"])
+    )
 
     peaks_a = detect_pulse_peaks(a)
     peaks_b = detect_pulse_peaks(b)
