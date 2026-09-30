@@ -169,6 +169,14 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn('Light mode', HTML)
         self.assertIn('Dark mode', HTML)
 
+    def test_audio_stops_when_signal_becomes_unavailable(self):
+        self.assertIn("function stopUnavailableAudio()", HTML)
+        self.assertIn("signal.connected", HTML)
+        self.assertIn("signal.running", HTML)
+        self.assertIn("signalViewEnabled(signal)", HTML)
+        self.assertIn("stopAudio(signalId, false)", HTML)
+        self.assertIn("stopUnavailableAudio();", HTML)
+
     def test_signal_panels_have_persistent_three_state_collapse(self):
         self.assertIn("biofeedbackPlay.panelViews.v1", HTML)
         self.assertIn("view-full", HTML)
