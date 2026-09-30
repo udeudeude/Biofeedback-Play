@@ -2114,9 +2114,46 @@ class BiofeedbackState:
             self.muse_passive_probe = status.passive_probe
             self.muse_afe_gain = status.afe_gain
 
+    def _reset_emwave_slot_history(self, unit_number: int) -> None:
+        """Clear data when a session slot is reassigned to a different device path."""
+
+        device_id = emwave_device_id(unit_number)
+        with self.lock:
+            if unit_number == 1:
+                self.emwave_seq = 0
+                self.emwave_packet_count = 0
+                self.emwave_gap_count = 0
+                self.emwave_samples.clear()
+                self.emwave_parser = EmWaveParser()
+                self.emwave_clock.reset()
+            else:
+                runtime = self.emwave_extra_units.get(unit_number)
+                if runtime is None:
+                    return
+                runtime["seq"] = 0
+                runtime["packet_count"] = 0
+                runtime["gap_count"] = 0
+                runtime["samples"].clear()
+                runtime["parser"] = EmWaveParser()
+                runtime["clock"].reset()
+
+            # A slot name is a session identity, not a permanent physical
+            # identity. If a different HID path takes the slot, old derived
+            # physiology and pair comparisons must not bleed into the new unit.
+            if hasattr(self, "derived_samples"):
+                for signal_id, definition in SIGNAL_DEFINITIONS.items():
+                    required = definition.get("requires_devices") or [
+                        definition.get("device_id")
+                    ]
+                    if device_id not in required:
+                        continue
+                    history = self.derived_samples.get(signal_id)
+                    if history is not None:
+                        history.clear()
+                        self.derived_seq[signal_id] = 0
+
     def _store_emwave_packet(self, parsed: dict, unit_number: int = 1) -> None:
-        packet_time = time.monotonic() - self.started_monotonic
-        sample_period = 1.0 / EMWAVE_NOMINAL_SAMPLE_RATE
+        arrival_t = time.monotonic() - self.started_monotonic
         device_id = emwave_device_id(unit_number)
         signal_id = f"{device_id}.pulse_raw"
         osc_path = f"{emwave_osc_prefix(unit_number)}/pulse_raw"
@@ -2126,11 +2163,14 @@ class BiofeedbackState:
                 self.emwave_packet_count += 1
                 self.emwave_gap_count += int(parsed.get("gap") or 0)
                 values = parsed["samples"]
-                for index, value in enumerate(values):
+                sample_times = self.emwave_clock.packet_times(
+                    arrival_t, int(parsed.get("gap") or 0)
+                )
+                for sample_t, value in zip(sample_times, values):
                     self.emwave_seq += 1
                     sample = {
                         "seq": self.emwave_seq,
-                        "t": packet_time - (len(values) - 1 - index) * sample_period,
+                        "t": sample_t,
                         "pulse": int(value),
                         "packet": int(parsed["counter"]),
                     }
@@ -2139,8 +2179,8 @@ class BiofeedbackState:
                     if self.recording and self.recording_writer:
                         self.recording_writer.writerow(
                             [
-                                f"{time.time():.6f}",
-                                f"{sample['t']:.6f}",
+                                f"{self.started_unix + sample_t:.6f}",
+                                f"{sample_t:.6f}",
                                 device_id,
                                 signal_id,
                                 int(value),
@@ -2156,7 +2196,11 @@ class BiofeedbackState:
                         except OSError as exc:
                             self.emwave_last_error = "OSC: " + str(exc)
 
-                if self.recording and self.recording_file and self.emwave_packet_count % 10 == 0:
+                if (
+                    self.recording
+                    and self.recording_file
+                    and self.emwave_packet_count % 10 == 0
+                ):
                     self.recording_file.flush()
                 return
 
@@ -2166,11 +2210,14 @@ class BiofeedbackState:
             runtime["packet_count"] += 1
             runtime["gap_count"] += int(parsed.get("gap") or 0)
             values = parsed["samples"]
-            for index, value in enumerate(values):
+            sample_times = runtime["clock"].packet_times(
+                arrival_t, int(parsed.get("gap") or 0)
+            )
+            for sample_t, value in zip(sample_times, values):
                 runtime["seq"] += 1
                 sample = {
                     "seq": runtime["seq"],
-                    "t": packet_time - (len(values) - 1 - index) * sample_period,
+                    "t": sample_t,
                     "pulse": int(value),
                     "packet": int(parsed["counter"]),
                 }
@@ -2179,8 +2226,8 @@ class BiofeedbackState:
                 if self.recording and self.recording_writer:
                     self.recording_writer.writerow(
                         [
-                            f"{time.time():.6f}",
-                            f"{sample['t']:.6f}",
+                            f"{self.started_unix + sample_t:.6f}",
+                            f"{sample_t:.6f}",
                             device_id,
                             signal_id,
                             int(value),
@@ -2196,7 +2243,11 @@ class BiofeedbackState:
                     except OSError as exc:
                         runtime["error"] = "OSC: " + str(exc)
 
-            if self.recording and self.recording_file and runtime["packet_count"] % 10 == 0:
+            if (
+                self.recording
+                and self.recording_file
+                and runtime["packet_count"] % 10 == 0
+            ):
                 self.recording_file.flush()
 
     def _store_sample(self, skin: int, pulse: int) -> None:
@@ -2387,6 +2438,7 @@ class BiofeedbackState:
 
         devices: dict[int, hid.device] = {}
         active_paths: dict[int, bytes] = {}
+        slot_paths: dict[int, bytes] = {}
         next_scan = 0.0
 
         def runtime_for(unit_number: int):
@@ -2416,12 +2468,14 @@ class BiofeedbackState:
                     self.emwave_connected = True
                     self.emwave_last_error = ""
                     self.emwave_parser = EmWaveParser()
+                    self.emwave_clock.reset()
                 else:
                     runtime = self.emwave_extra_units[unit_number]
                     runtime["connected"] = True
                     runtime["seen"] = True
                     runtime["error"] = ""
                     runtime["parser"] = EmWaveParser()
+                    runtime["clock"].reset()
 
         def close_unit(unit_number: int) -> None:
             device = devices.pop(unit_number, None)
@@ -2447,12 +2501,23 @@ class BiofeedbackState:
                     continue
 
                 next_scan = now + 1.0
+                slot_paths, replaced_slots = reconcile_emwave_slot_paths(
+                    slot_paths, paths
+                )
+                for unit_number in sorted(replaced_slots):
+                    if unit_number in devices:
+                        close_unit(unit_number)
+                    self._reset_emwave_slot_history(unit_number)
 
+                connected_paths = set(paths)
                 for unit_number in range(1, 5):
-                    path_index = unit_number - 1
+                    assigned_path = slot_paths.get(unit_number)
                     wanted_path = (
-                        paths[path_index]
-                        if should_run(unit_number) and path_index < len(paths)
+                        assigned_path
+                        if (
+                            should_run(unit_number)
+                            and assigned_path in connected_paths
+                        )
                         else None
                     )
 
