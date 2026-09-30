@@ -190,6 +190,10 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("kind-badge", HTML)
         self.assertIn("source-chip", HTML)
 
+    def test_live_signal_polling_is_batched(self):
+        self.assertIn("/api/signal_samples_batch", HTML)
+        self.assertNotIn('fetch("/api/signal_samples?id="', HTML)
+
     def test_use_tab_only_shows_enabled_live_signals(self):
         self.assertIn("Only live signals from enabled device views appear below.", HTML)
         self.assertIn("signal.connected && signal.running && signalViewEnabled(signal)", HTML)
