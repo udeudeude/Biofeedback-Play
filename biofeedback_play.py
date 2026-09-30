@@ -1249,6 +1249,7 @@ class BiofeedbackState:
         self.emwave_seq = 0
         self.emwave_packet_count = 0
         self.emwave_gap_count = 0
+        self.emwave_generation = 0
         self.emwave_samples = deque(maxlen=36000)
         self.emwave_parser = EmWaveParser()
         self.emwave_clock = EmWaveSampleClock()
@@ -1264,6 +1265,7 @@ class BiofeedbackState:
                 "seq": 0,
                 "packet_count": 0,
                 "gap_count": 0,
+                "generation": 0,
                 "samples": deque(maxlen=36000),
                 "parser": EmWaveParser(),
                 "clock": EmWaveSampleClock(),
@@ -1518,6 +1520,7 @@ class BiofeedbackState:
                     "sample_count": self.emwave_seq,
                     "packet_count": self.emwave_packet_count,
                     "packet_gaps": self.emwave_gap_count,
+                    "generation": self.emwave_generation,
                     "estimated_sample_rate_hz": round(
                         self.emwave_clock.sample_rate_hz, 2
                     ),
@@ -1580,6 +1583,7 @@ class BiofeedbackState:
                     "sample_count": runtime["seq"],
                     "packet_count": runtime["packet_count"],
                     "packet_gaps": runtime["gap_count"],
+                    "generation": runtime["generation"],
                     "estimated_sample_rate_hz": round(
                         runtime["clock"].sample_rate_hz, 2
                     ),
@@ -1639,6 +1643,10 @@ class BiofeedbackState:
                 for req in required
                 if req in devices
             ]
+            source_generation = "|".join(
+                f"{req}:{devices.get(req, {}).get('generation', 0)}"
+                for req in required
+            )
 
             signals.append(
                 {
@@ -1646,6 +1654,7 @@ class BiofeedbackState:
                     **definition,
                     "device_name": definition.get("source_name") or device["name"],
                     "data_sources": data_sources,
+                    "source_generation": source_generation,
                     "connected": connected,
                     "running": running,
                     "device_error": device["error"],
@@ -2123,6 +2132,7 @@ class BiofeedbackState:
                 self.emwave_seq = 0
                 self.emwave_packet_count = 0
                 self.emwave_gap_count = 0
+                self.emwave_generation += 1
                 self.emwave_samples.clear()
                 self.emwave_parser = EmWaveParser()
                 self.emwave_clock.reset()
@@ -2133,6 +2143,7 @@ class BiofeedbackState:
                 runtime["seq"] = 0
                 runtime["packet_count"] = 0
                 runtime["gap_count"] = 0
+                runtime["generation"] += 1
                 runtime["samples"].clear()
                 runtime["parser"] = EmWaveParser()
                 runtime["clock"].reset()
@@ -3976,14 +3987,24 @@ document.getElementById("cameraGain").oninput = function() {
 
 
 function ensureSignalState(signal) {
+  const generation = String(signal.source_generation || "");
   if (!signalState[signal.id]) {
     signalState[signal.id] = {
       seq: 0,
       values: [],
       times: [],
       audioOn: false,
-      audioNode: null
+      audioNode: null,
+      generation: generation
     };
+  } else if (signalState[signal.id].generation !== generation) {
+    // A different physical sensor took this session slot. Reset the browser's
+    // local graph cursor too, otherwise its old high sequence number would
+    // suppress the new slot history after the server resets to sequence zero.
+    signalState[signal.id].seq = 0;
+    signalState[signal.id].values = [];
+    signalState[signal.id].times = [];
+    signalState[signal.id].generation = generation;
   }
   return signalState[signal.id];
 }
