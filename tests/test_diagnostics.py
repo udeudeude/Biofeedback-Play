@@ -217,6 +217,8 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn('action: action', HTML)
         self.assertIn("Waveform rate:", HTML)
         self.assertIn("Estimated waveform rate:", HTML)
+        self.assertIn("source_generation", HTML)
+        self.assertIn("generation !== generation", HTML)
 
 
 if __name__ == "__main__":
