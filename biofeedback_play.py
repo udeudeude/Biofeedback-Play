@@ -3479,7 +3479,11 @@ function signalMeaning(signal) {
     "skin_phasic": "Faster skin-conductance change above or below its recent baseline.",
     "skin_slope": "Whether skin conductance is generally rising or falling.",
     "skin_responses": "Rate of rapid relative skin-conductance responses.",
-    "skin_variability": "How much skin conductance has varied recently."
+    "skin_variability": "How much skin conductance has varied recently.",
+    "hr_difference": "How far apart the two sources' current heart-rate estimates are.",
+    "beat_offset": "Typical timing offset between beats detected by the two sources.",
+    "correlation": "How similarly the two recent pulse waveforms rise and fall.",
+    "amplitude_ratio": "Relative recent pulse-wave amplitude between the two sources."
   };
   if (id.endsWith(".pulse_raw")) return "The sensor's direct optical pulse waveform before calculated metrics.";
   if (id.endsWith(".skin_raw")) return "The sensor's direct skin-conductance signal.";
