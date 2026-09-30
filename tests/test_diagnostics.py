@@ -3,6 +3,7 @@ import unittest
 from biofeedback_play import (
     EmWaveParser,
     HTML,
+    DEVICE_DEFINITIONS,
     SIGNAL_DEFINITIONS,
     capture_summary,
     emwave_device_id,
@@ -77,6 +78,26 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("emwave2.heart_rate", SIGNAL_DEFINITIONS)
         self.assertIn("comparison.emwave1_emwave2.beat_offset", SIGNAL_DEFINITIONS)
         self.assertIn("comparison.emwave1_emwave2.amplitude_ratio", SIGNAL_DEFINITIONS)
+
+    def test_all_four_emwave_slots_are_defined(self):
+        self.assertIn("emwave", DEVICE_DEFINITIONS)
+        self.assertIn("emwave2", DEVICE_DEFINITIONS)
+        self.assertIn("emwave3", DEVICE_DEFINITIONS)
+        self.assertIn("emwave4", DEVICE_DEFINITIONS)
+
+    def test_ui_has_persistent_light_and_dark_modes(self):
+        self.assertIn('id="themeToggle"', HTML)
+        self.assertIn('biofeedbackPlay.theme.v1', HTML)
+        self.assertIn('data-theme="light"', HTML)
+        self.assertIn('Light mode', HTML)
+        self.assertIn('Dark mode', HTML)
+
+    def test_ui_has_persistent_device_view_controls(self):
+        self.assertIn('id="deviceViewButtons"', HTML)
+        self.assertIn('biofeedbackPlay.deviceViews.v1', HTML)
+        self.assertIn('deviceViewEnabled', HTML)
+        self.assertIn('signalViewEnabled', HTML)
+        self.assertIn('Choose which devices may appear here, even while they are unplugged.', HTML)
 
     def test_ui_has_glanceable_signal_hierarchy(self):
         self.assertIn('data-signal-filter="direct"', HTML)
