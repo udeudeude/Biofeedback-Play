@@ -8,6 +8,7 @@ import math
 import os
 import re
 import socket
+import statistics
 import struct
 import subprocess
 import threading
@@ -42,6 +43,10 @@ PRODUCT_ID = 0x0001
 EMWAVE_VENDOR_ID = 0x0E30
 EMWAVE_PRODUCT_ID = 0x0002
 EMWAVE_NOMINAL_SAMPLE_RATE = 370.0
+EMWAVE_SAMPLES_PER_REPORT = 6
+EMWAVE_RATE_ESTIMATE_WINDOW = 512
+EMWAVE_RATE_MIN = 330.0
+EMWAVE_RATE_MAX = 410.0
 HOST = "127.0.0.1"
 PORT = 8765
 
@@ -654,6 +659,113 @@ for _emwave_index in range(1, 5):
     )
 
 
+class EmWaveSampleClock:
+    """Reconstruct emWave sample time without inheriting USB delivery jitter.
+
+    The module sends six consecutive waveform samples per numbered report. macOS
+    can deliver those reports in small bursts, so timestamping every report at
+    its host-arrival time injects several milliseconds of artificial beat-time
+    jitter. This clock follows packet-counter progression, reserves time for
+    missing reports, and slowly estimates each connected module's actual sample
+    rate from long-run packet delivery while starting from HeartMath's 370 Hz
+    nominal rate.
+    """
+
+    def __init__(
+        self,
+        nominal_rate: float = EMWAVE_NOMINAL_SAMPLE_RATE,
+        samples_per_report: int = EMWAVE_SAMPLES_PER_REPORT,
+    ) -> None:
+        self.nominal_rate = float(nominal_rate)
+        self.samples_per_report = int(samples_per_report)
+        self.sample_rate_hz = float(nominal_rate)
+        self.last_end_t: float | None = None
+        self.packet_index = 0
+        self.clock_resets = 0
+        self.rate_points = deque(maxlen=EMWAVE_RATE_ESTIMATE_WINDOW)
+        self.last_rate_update_packet = 0
+
+    def reset(self) -> None:
+        self.sample_rate_hz = self.nominal_rate
+        self.last_end_t = None
+        self.packet_index = 0
+        self.rate_points.clear()
+        self.last_rate_update_packet = 0
+
+    def _update_rate_estimate(self) -> None:
+        if len(self.rate_points) < 128:
+            return
+        if self.packet_index - self.last_rate_update_packet < 64:
+            return
+
+        first_arrival = self.rate_points[0][1]
+        last_arrival = self.rate_points[-1][1]
+        if last_arrival - first_arrival < 2.0:
+            return
+
+        mean_x = statistics.fmean(point[0] for point in self.rate_points)
+        mean_t = statistics.fmean(point[1] for point in self.rate_points)
+        denominator = sum((x - mean_x) ** 2 for x, _ in self.rate_points)
+        if denominator <= 0:
+            return
+        slope = sum(
+            (x - mean_x) * (t - mean_t)
+            for x, t in self.rate_points
+        ) / denominator
+        if slope <= 0:
+            return
+
+        observed_rate = self.samples_per_report / slope
+        if EMWAVE_RATE_MIN <= observed_rate <= EMWAVE_RATE_MAX:
+            # Long-window host timing is useful for correcting crystal/rate
+            # differences, but short USB scheduling bursts should not jerk the
+            # physiological clock around.
+            self.sample_rate_hz = (
+                0.85 * self.sample_rate_hz + 0.15 * observed_rate
+            )
+            self.last_rate_update_packet = self.packet_index
+
+    def packet_times(self, arrival_t: float, gap: int = 0) -> list[float]:
+        packet_steps = max(1, int(gap) + 1)
+        self.packet_index += packet_steps
+        arrival_t = float(arrival_t)
+        self.rate_points.append((self.packet_index, arrival_t))
+        self._update_rate_estimate()
+
+        sample_period = 1.0 / max(1.0, self.sample_rate_hz)
+        if self.last_end_t is None:
+            packet_end_t = arrival_t
+        else:
+            predicted_end = (
+                self.last_end_t
+                + packet_steps * self.samples_per_report * sample_period
+            )
+            arrival_error = arrival_t - predicted_end
+            if abs(arrival_error) > 0.35:
+                # Host sleep, a long stall, or a reconnect makes the old phase
+                # meaningless. Re-anchor rather than fabricating a long run of
+                # uniformly timed samples.
+                packet_end_t = arrival_t
+                self.clock_resets += 1
+                self.rate_points.clear()
+                self.packet_index = 0
+                self.rate_points.append((0, arrival_t))
+                self.last_rate_update_packet = 0
+            else:
+                # Correct phase very gently so independent devices stay aligned
+                # to the host clock without importing millisecond-scale USB
+                # scheduling jitter into beat timing.
+                correction = max(-0.0015, min(0.0015, arrival_error * 0.03))
+                packet_end_t = predicted_end + correction
+
+        self.last_end_t = packet_end_t
+        first_t = packet_end_t - (self.samples_per_report - 1) * sample_period
+        return [
+            first_t + index * sample_period
+            for index in range(self.samples_per_report)
+        ]
+
+
 class EmWaveParser:
     """Experimental parser based on captures from emWave USB 0x0E30:0x0002.
 
@@ -680,7 +792,10 @@ class EmWaveParser:
         return {
             "counter": counter,
             "gap": gap,
-            "samples": [int(value) & 0xFF for value in report[2:8]],
+            "samples": [
+                int(value) & 0xFF
+                for value in report[2 : 2 + EMWAVE_SAMPLES_PER_REPORT]
+            ],
         }
 
 
@@ -849,6 +964,53 @@ def emwave_hid_paths() -> list[bytes]:
     return sorted(paths)
 
 
+def reconcile_emwave_slot_paths(
+    assignments: dict[int, bytes],
+    connected_paths: list[bytes],
+    max_units: int = 4,
+) -> tuple[dict[int, bytes], set[int]]:
+    """Keep identical emWave modules in stable session slots by HID path.
+
+    Removing emWave 1 must not silently rename emWave 2 as emWave 1. Existing
+    connected paths therefore keep their slots. A newly appearing path first
+    replaces a reservation whose old path is absent, then uses a never-assigned
+    slot. Replaced slots are returned so their physiological history can be
+    cleared instead of mixing two physical sensors under one label.
+    """
+
+    out = dict(assignments)
+    current = list(dict.fromkeys(bytes(path) for path in connected_paths))
+    current_set = set(current)
+    assigned_present = {
+        path for path in out.values()
+        if path in current_set
+    }
+    newcomers = [path for path in current if path not in assigned_present]
+    replaced: set[int] = set()
+
+    for path in newcomers:
+        missing_slots = [
+            unit_number
+            for unit_number in range(1, max_units + 1)
+            if unit_number in out and out[unit_number] not in current_set
+        ]
+        empty_slots = [
+            unit_number
+            for unit_number in range(1, max_units + 1)
+            if unit_number not in out
+        ]
+        candidates = missing_slots or empty_slots
+        if not candidates:
+            break
+        unit_number = candidates[0]
+        previous = out.get(unit_number)
+        out[unit_number] = path
+        if previous is not None and previous != path:
+            replaced.add(unit_number)
+
+    return out, replaced
+
+
 def hid_device_for_token(token: str) -> dict:
     for device in hid_device_list():
         if device["path_token"] == token:
@@ -987,6 +1149,7 @@ class BiofeedbackState:
         self.shutdown = False
         self.last_error = ""
         self.seq = 0
+        self.started_unix = time.time()
         self.started_monotonic = time.monotonic()
         self.samples = deque(maxlen=5000)
 
@@ -1012,6 +1175,7 @@ class BiofeedbackState:
         self.emwave_gap_count = 0
         self.emwave_samples = deque(maxlen=36000)
         self.emwave_parser = EmWaveParser()
+        self.emwave_clock = EmWaveSampleClock()
 
         self.emwave_extra_units = {}
         for unit_number in range(2, 5):
@@ -1026,6 +1190,7 @@ class BiofeedbackState:
                 "gap_count": 0,
                 "samples": deque(maxlen=36000),
                 "parser": EmWaveParser(),
+                "clock": EmWaveSampleClock(),
             }
             self.emwave_extra_units[unit_number] = runtime
 
@@ -1223,6 +1388,8 @@ class BiofeedbackState:
                 "emwave_sample_count": self.emwave_seq,
                 "emwave_packet_count": self.emwave_packet_count,
                 "emwave_gap_count": self.emwave_gap_count,
+                "emwave_sample_rate_hz": self.emwave_clock.sample_rate_hz,
+                "emwave_clock_resets": self.emwave_clock.clock_resets,
                 "muse_running": self.muse_running,
                 "muse_connected": (
                     self.muse_connected
@@ -1275,6 +1442,10 @@ class BiofeedbackState:
                     "sample_count": self.emwave_seq,
                     "packet_count": self.emwave_packet_count,
                     "packet_gaps": self.emwave_gap_count,
+                    "estimated_sample_rate_hz": round(
+                        self.emwave_clock.sample_rate_hz, 2
+                    ),
+                    "clock_resets": self.emwave_clock.clock_resets,
                 },
                 "muse": {
                     "connected": (
@@ -1333,6 +1504,10 @@ class BiofeedbackState:
                     "sample_count": runtime["seq"],
                     "packet_count": runtime["packet_count"],
                     "packet_gaps": runtime["gap_count"],
+                    "estimated_sample_rate_hz": round(
+                        runtime["clock"].sample_rate_hz, 2
+                    ),
+                    "clock_resets": runtime["clock"].clock_resets,
                     "seen": runtime["seen"],
                 }
 
@@ -1400,6 +1575,8 @@ class BiofeedbackState:
                     "device_error": device["error"],
                     "sample_count": sample_count,
                     "packet_gaps": device.get("packet_gaps"),
+                    "estimated_sample_rate_hz": device.get("estimated_sample_rate_hz"),
+                    "clock_resets": device.get("clock_resets"),
                     "battery": device.get("battery"),
                     "afe_gain": device.get("afe_gain"),
                 }
