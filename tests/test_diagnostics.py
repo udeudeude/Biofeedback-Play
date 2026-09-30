@@ -214,7 +214,10 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn('classList.remove("active")', HTML)
         self.assertIn("cameraQualityValue", HTML)
         self.assertIn("Heartbeat-band color magnification", HTML)
-        self.assertIn("POS-style RGB combination", HTML)
+        self.assertIn(
+            "POS-style",
+            SIGNAL_DEFINITIONS["camera.ppg_raw"]["description"],
+        )
         self.assertIn("cameraPosPulse", HTML)
         self.assertIn('action: action', HTML)
         self.assertIn("Waveform rate:", HTML)
