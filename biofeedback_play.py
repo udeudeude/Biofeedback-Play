@@ -4768,8 +4768,30 @@ function updateGlobalStatus() {
     : "No configured device is currently connected.";
 }
 
+function stopUnavailableAudio() {
+  Object.keys(signalState).forEach(function(signalId) {
+    const state = signalState[signalId];
+    if (!state || !state.audioOn) return;
+
+    const signal = catalog.signals.find(function(item) {
+      return item.id === signalId;
+    });
+    const stillAvailable = Boolean(
+      signal &&
+      signal.connected &&
+      signal.running &&
+      signalViewEnabled(signal)
+    );
+
+    if (!stillAvailable) {
+      stopAudio(signalId, false);
+    }
+  });
+}
+
 function applyCatalog(data) {
   catalog = data;
+  stopUnavailableAudio();
   renderDeviceViewControls(catalog.devices);
   syncCameraViewVisibility();
   const displayed = visibleSignals(catalog.signals);
@@ -4968,7 +4990,8 @@ function toggleAudio(signalId) {
   updateAudio(signal);
 }
 
-function stopAudio(signalId) {
+function stopAudio(signalId, refreshPanels) {
+  if (refreshPanels === undefined) refreshPanels = true;
   const signal = catalog.signals.find(function(s) { return s.id === signalId; });
   const state = signalState[signalId];
   if (!state) return;
@@ -4978,7 +5001,7 @@ function stopAudio(signalId) {
     try { state.audioNode.oscillator.stop(audioContext.currentTime + .08); } catch (_) {}
     state.audioNode = null;
   }
-  if (signal) updateSignalPanels(catalog.signals);
+  if (refreshPanels && signal) updateSignalPanels(catalog.signals);
 }
 
 function updateAudio(signal) {
