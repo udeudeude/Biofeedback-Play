@@ -89,6 +89,8 @@ class DiagnosticsTests(unittest.TestCase):
                 "known": "HeartMath emWave Pulse Sensor",
                 "product": "emWave Pulse Sensor",
                 "manufacturer": "QUANTUM INTECH",
+                "vendor_id": 0x0E30,
+                "product_id": 0x0002,
                 "vendor_hex": "0x0e30",
                 "product_hex": "0x0002",
                 "usage_page": 0xFF00,
