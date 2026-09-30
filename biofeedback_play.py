@@ -4229,15 +4229,17 @@ function refreshMusePorts() {
 function updateGlobalStatus() {
   const connected = catalog.devices.filter(function(d) { return d.connected && d.running; });
   const liveSignals = catalog.signals.filter(function(s) { return s.connected && s.running; });
+  const shownSignals = visibleSignals(catalog.signals);
   const dot = document.getElementById("globalDot");
   dot.className = connected.length ? "dot on" : "dot";
   document.getElementById("globalStatus").textContent =
     connected.length + " device" + (connected.length === 1 ? "" : "s") +
-    " connected · " + liveSignals.length + " live signal" + (liveSignals.length === 1 ? "" : "s");
+    " connected · " + shownSignals.length + " shown";
 
   document.getElementById("sessionSummary").textContent = connected.length
     ? connected.map(function(d) { return d.name; }).join(" · ") +
-      " · " + liveSignals.length + " live/derived signal panel" + (liveSignals.length === 1 ? "" : "s")
+      " · " + shownSignals.length + " shown of " + liveSignals.length + " live signal" +
+      (liveSignals.length === 1 ? "" : "s")
     : "No configured device is currently connected.";
 }
 
