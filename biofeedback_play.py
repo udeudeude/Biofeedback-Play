@@ -1031,6 +1031,77 @@ def test_hid_device(token: str) -> dict:
     return {"opened": True, "device": meta}
 
 
+def emwave_capture_diagnostics(capture: dict) -> list[str]:
+    device = capture.get("device") or {}
+    if (
+        int(device.get("vendor_id") or 0) != EMWAVE_VENDOR_ID
+        or int(device.get("product_id") or 0) != EMWAVE_PRODUCT_ID
+    ):
+        return []
+
+    reports = [
+        report
+        for report in capture.get("reports", [])
+        if len(report.get("bytes") or []) >= 8
+        and int(report["bytes"][0]) == 0x01
+    ]
+    if not reports:
+        return ["emWave framing: no valid 8-byte 0x01 reports found"]
+
+    parser = EmWaveParser()
+    gaps = 0
+    samples: list[int] = []
+    for report in reports:
+        parsed = parser.feed_report(report["bytes"])
+        if parsed is None:
+            continue
+        gaps += int(parsed.get("gap") or 0)
+        samples.extend(parsed["samples"])
+
+    intervals = [
+        float(second["t"]) - float(first["t"])
+        for first, second in zip(reports, reports[1:])
+        if float(second["t"]) > float(first["t"])
+    ]
+    duration = float(capture.get("duration_s") or 0.0)
+    observed_delivery = (
+        len(samples) / duration
+        if duration > 0
+        else 0.0
+    )
+
+    lines = [
+        (
+            "emWave framing: "
+            f"{len(reports)} valid reports × {EMWAVE_SAMPLES_PER_REPORT} "
+            "consecutive waveform samples/report"
+        ),
+        f"Counter gaps: {gaps}",
+    ]
+    if intervals:
+        lines.append(
+            "Host report timing: median "
+            f"{statistics.median(intervals) * 1000.0:.3f} ms; "
+            f"longest {max(intervals) * 1000.0:.3f} ms"
+        )
+    lines.append(
+        "Host-observed waveform delivery: "
+        f"{observed_delivery:.1f} samples/s "
+        f"(nominal device rate {EMWAVE_NOMINAL_SAMPLE_RATE:.0f} Hz)"
+    )
+    if samples:
+        near_top = 100.0 * sum(value >= 250 for value in samples) / len(samples)
+        lines.append(
+            f"Raw waveform range: {min(samples)}–{max(samples)}; "
+            f"samples ≥250: {near_top:.1f}%"
+        )
+    lines.append(
+        "Timing note: USB arrival can be bursty; live acquisition reconstructs "
+        "sample time from packet order rather than treating host arrival as the sensor clock."
+    )
+    return lines
+
+
 def capture_summary(capture: dict, max_lines: int = 250) -> str:
     device = capture["device"]
     lines = [
@@ -1041,9 +1112,14 @@ def capture_summary(capture: dict, max_lines: int = 250) -> str:
         f"Usage page / usage: 0x{device['usage_page']:04x} / {device['usage']}",
         f"Duration: {capture['duration_s']:.3f} s",
         f"Reports received: {len(capture['reports'])}",
+    ]
+    diagnostics = emwave_capture_diagnostics(capture)
+    if diagnostics:
+        lines.extend([""] + diagnostics)
+    lines.extend([
         "",
         "time_s    hex bytes                                              ASCII",
-    ]
+    ])
 
     for report in capture["reports"][:max_lines]:
         lines.append(
