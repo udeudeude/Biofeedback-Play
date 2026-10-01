@@ -3307,11 +3307,11 @@ canvas {
             </label>
             <label class="small">Guide left/right
               <input id="cameraGuideX" type="range" min="-20" max="20" step="1" value="0">
-              <strong id="cameraGuideXValue">0%</strong>
+              <strong id="cameraGuideXValue">center</strong>
             </label>
             <label class="small">Guide up/down
               <input id="cameraGuideY" type="range" min="-20" max="20" step="1" value="0">
-              <strong id="cameraGuideYValue">0%</strong>
+              <strong id="cameraGuideYValue">center</strong>
             </label>
           </div>
 
@@ -3364,8 +3364,8 @@ canvas {
       <section class="card half">
         <div class="label">About audio feedback</div>
         <div class="small" style="margin-top:6px">
-          Each signal panel has its own Audio button. Audio is generated locally in the browser.
-          It is a sonification of the incoming signal, not a reconstructed heartbeat or diagnostic sound.
+          Each signal panel has a speaker icon for sonification. Audio is generated locally in the browser.
+          It follows the incoming signal; it is not a reconstructed heartbeat or diagnostic sound.
         </div>
       </section>
 
@@ -4183,17 +4183,22 @@ document.getElementById("cameraGain").oninput = function() {
   document.getElementById("cameraGainValue").textContent =
     String(document.getElementById("cameraGain").value) + "×";
 };
-[
-  ["cameraGuideScale", "cameraGuideScaleValue"],
-  ["cameraGuideX", "cameraGuideXValue"],
-  ["cameraGuideY", "cameraGuideYValue"]
-].forEach(function(ids) {
-  const input = document.getElementById(ids[0]);
-  const output = document.getElementById(ids[1]);
+document.getElementById("cameraGuideScale").oninput = function() {
+  document.getElementById("cameraGuideScaleValue").textContent =
+    String(document.getElementById("cameraGuideScale").value) + "%";
+};
+function updateCameraGuideAxis(inputId, outputId, negativeWord, positiveWord) {
+  const input = document.getElementById(inputId);
+  const output = document.getElementById(outputId);
   input.oninput = function() {
-    output.textContent = String(input.value) + "%";
+    const value = Number(input.value);
+    output.textContent = value === 0
+      ? "center"
+      : Math.abs(value) + "% " + (value < 0 ? negativeWord : positiveWord);
   };
-});
+}
+updateCameraGuideAxis("cameraGuideX", "cameraGuideXValue", "left", "right");
+updateCameraGuideAxis("cameraGuideY", "cameraGuideYValue", "up", "down");
 
 
 
