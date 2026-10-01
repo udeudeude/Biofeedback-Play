@@ -679,6 +679,7 @@ class Muse2014SerialClient:
             f"EEG packets {counts['eeg']}, accelerometer {counts['accelerometer']}, "
             f"battery {counts['battery']}; first bytes: {preview}"
         )
+        self._trace(self.status.passive_probe)
         self._notify_status("Passive Muse serial probe complete")
 
         recognized = sum(counts.values())
@@ -853,6 +854,8 @@ class Muse2014SerialClient:
                         timeout=0.25,
                         channel_id=channel_id,
                     )
+                    if self._probe_passive_stream(seconds=2.0):
+                        return self.status.version
                     version = self._version_handshake(
                         attempts=2,
                         terminator=terminator,
