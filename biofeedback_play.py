@@ -26,6 +26,7 @@ from devices.muse2014 import (
     MUSE_ACCEL_RATE,
     MUSE_EEG_RATE,
     Muse2014SerialClient,
+    list_muse_bluetooth_devices,
     list_muse_serial_ports,
 )
 from physiology import (
@@ -1286,7 +1287,8 @@ class BiofeedbackState:
         self.muse_port = str(settings.get("muse_port") or "")
         self.muse_version = ""
         self.muse_status_text = ""
-        self.muse_stage = "Waiting for serial port"
+        self.muse_trace = []
+        self.muse_stage = "Waiting for connection target"
         self.muse_attempt_state = "idle"
         self.muse_stage_started_monotonic = time.monotonic()
         self.muse_retry_at_monotonic = 0.0
@@ -1477,6 +1479,7 @@ class BiofeedbackState:
                 "muse_port": self.muse_port,
                 "muse_version": self.muse_version,
                 "muse_status_text": self.muse_status_text,
+                "muse_trace": list(self.muse_trace),
                 "muse_stage": self.muse_stage,
                 "muse_attempt_state": self.muse_attempt_state,
                 "muse_stage_elapsed_s": max(
@@ -1547,6 +1550,7 @@ class BiofeedbackState:
                     "port": self.muse_port,
                     "version": self.muse_version,
                     "status_text": self.muse_status_text,
+                    "trace": list(self.muse_trace),
                     "stage": self.muse_stage,
                     "attempt_state": self.muse_attempt_state,
                     "stage_elapsed_s": max(
@@ -2113,6 +2117,7 @@ class BiofeedbackState:
                 self.muse_stage_started_monotonic = time.monotonic()
             self.muse_version = status.version
             self.muse_status_text = status.status_text
+            self.muse_trace = list(getattr(status, "trace", []))
             self.muse_stage = status.stage
             self.muse_attempt_state = "working"
             self.muse_last_error = ""
@@ -2379,7 +2384,7 @@ class BiofeedbackState:
                 with self.lock:
                     self.muse_connected = False
                     wanted_stage = (
-                        "Acquisition stopped" if not should_run else "Waiting for serial port"
+                        "Acquisition stopped" if not should_run else "Waiting for connection target"
                     )
                     if wanted_stage != self.muse_stage:
                         self.muse_stage_started_monotonic = time.monotonic()
@@ -3206,6 +3211,16 @@ canvas {
 }
 .muse-attempt-title { font-weight: 700; margin-bottom: 3px; }
 .muse-attempt-detail { color: var(--muted); }
+.muse-trace {
+  margin-top: 8px; max-height: 230px; overflow: auto;
+  white-space: pre-wrap; word-break: break-word;
+  padding: 9px 10px; border: 1px solid var(--line); border-radius: 9px;
+  background: #0d1017; color: var(--muted);
+  font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+html[data-theme="light"] .muse-trace {
+  background: #f4f6f9; color: #4d5666;
+}
 
 .diag-output {
   white-space: pre-wrap; word-break: break-word; margin: 12px 0 0;
