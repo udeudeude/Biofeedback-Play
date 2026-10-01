@@ -39,6 +39,30 @@ class Muse2014Tests(unittest.TestCase):
             "Muse-A620",
         )
 
+    def test_bluetooth_target_uses_address_directly(self):
+        self.assertEqual(
+            Muse2014SerialClient._muse_name_from_port("bt://00-11-22-33-44-55"),
+            "00-11-22-33-44-55",
+        )
+        self.assertEqual(
+            Muse2014SerialClient._mac_serial_candidates(
+                "bt://00-11-22-33-44-55"
+            ),
+            [],
+        )
+
+    def test_connection_trace_records_stages(self):
+        client = Muse2014SerialClient(
+            port="bt://00-11-22-33-44-55",
+            on_eeg=lambda value: None,
+            on_accelerometer=lambda value: None,
+            on_battery=lambda value: None,
+        )
+        client.attempt_started_monotonic = 1.0
+        client._notify_status("Trying RFCOMM")
+        self.assertTrue(client.status.trace)
+        self.assertIn("Trying RFCOMM", client.status.trace[-1])
+
     def test_mac_serial_candidates_prefer_tty_sibling(self):
         candidates = Muse2014SerialClient._mac_serial_candidates(
             "/dev/cu.Muse-A620"
