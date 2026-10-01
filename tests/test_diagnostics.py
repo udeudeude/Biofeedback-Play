@@ -177,21 +177,37 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("stopAudio(signalId, false)", HTML)
         self.assertIn("stopUnavailableAudio();", HTML)
 
-    def test_signal_panels_have_persistent_three_state_collapse(self):
+    def test_signal_panels_have_persistent_full_and_mini_views(self):
         self.assertIn("biofeedbackPlay.panelViews.v1", HTML)
         self.assertIn("view-full", HTML)
         self.assertIn("view-mini", HTML)
-        self.assertIn("view-name", HTML)
+        self.assertNotIn("view-name", HTML)
         self.assertIn("data-panel-view-toggle", HTML)
+        self.assertIn("panel-view-dot", HTML)
         self.assertIn("signal-collapse-device", HTML)
         self.assertIn("cyclePanelView", HTML)
+        self.assertIn("Collapse panel", HTML)
+        self.assertIn("Expand panel", HTML)
 
-    def test_ui_has_persistent_device_view_controls(self):
+    def test_ui_has_persistent_device_view_switches(self):
         self.assertIn('id="deviceViewButtons"', HTML)
         self.assertIn('biofeedbackPlay.deviceViews.v1', HTML)
         self.assertIn('deviceViewEnabled', HTML)
         self.assertIn('signalViewEnabled', HTML)
-        self.assertIn('Choose which devices may appear here, even while they are unplugged.', HTML)
+        self.assertIn('role="switch"', HTML)
+        self.assertIn("switch-track", HTML)
+        self.assertIn("switch-knob", HTML)
+        self.assertNotIn("Choose which devices may appear here, even while they are unplugged.", HTML)
+
+    def test_audio_uses_speaker_icons_and_remains_in_mini_view(self):
+        self.assertIn("🔊", HTML)
+        self.assertIn("🔇", HTML)
+        self.assertIn("audio-icon", HTML)
+        self.assertIn("Mute audio", HTML)
+        self.assertNotIn('[id^="audio_"]', HTML)
+
+    def test_primary_buttons_keep_readable_text_in_light_mode(self):
+        self.assertIn("button.primary { background: #4338ca; border-color: #635bdf; color: #fff; }", HTML)
 
     def test_ui_has_glanceable_signal_hierarchy(self):
         self.assertIn('data-signal-filter="direct"', HTML)
@@ -211,8 +227,9 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("/api/signal_samples_batch", HTML)
         self.assertNotIn('fetch("/api/signal_samples?id="', HTML)
 
-    def test_use_tab_only_shows_enabled_live_signals(self):
-        self.assertIn("Only live signals from enabled device views appear below.", HTML)
+    def test_live_data_tab_only_shows_enabled_live_signals(self):
+        self.assertIn(">Live data</button>", HTML)
+        self.assertNotIn("Only live signals from enabled device views appear below.", HTML)
         self.assertIn("signal.connected && signal.running && signalViewEnabled(signal)", HTML)
         self.assertIn("No live device data", HTML)
 
@@ -227,14 +244,18 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertNotIn("camera.respiration_estimate", SIGNAL_DEFINITIONS)
         self.assertIn("comparison.lightstone_camera.beat_offset", SIGNAL_DEFINITIONS)
         self.assertIn("cameraSourceCanvas", HTML)
-        self.assertIn("cameraMagnifiedCanvas", HTML)
-        self.assertIn("cameraMagnifyEnabled", HTML)
+        self.assertNotIn("cameraMagnifiedCanvas", HTML)
+        self.assertNotIn("cameraMagnifyEnabled", HTML)
+        self.assertIn("cameraMagnifyToggle", HTML)
+        self.assertIn("cameraGuideScale", HTML)
+        self.assertIn("cameraGuideX", HTML)
+        self.assertIn("cameraGuideY", HTML)
         self.assertIn("Optional input · Camera", HTML)
         self.assertIn("camera-lab-details", HTML)
         self.assertIn('classList.add("active")', HTML)
         self.assertIn('classList.remove("active")', HTML)
         self.assertIn("cameraQualityValue", HTML)
-        self.assertIn("Heartbeat-band color magnification", HTML)
+        self.assertIn("Magnified pulse-band view", HTML)
         self.assertIn(
             "POS-style",
             SIGNAL_DEFINITIONS["camera.ppg_raw"]["description"],

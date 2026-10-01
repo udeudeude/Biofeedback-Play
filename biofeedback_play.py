@@ -2757,9 +2757,9 @@ button {
   border-radius: 10px; padding: 9px 13px; cursor: pointer;
 }
 button:hover { border-color: #68718a; }
-button.primary { background: #4338ca; border-color: #635bdf; }
-button.recording { background: #81233f; border-color: #b33c60; }
-button.audio-on { background: #315b46; border-color: #4d8b6b; }
+button.primary { background: #4338ca; border-color: #635bdf; color: #fff; }
+button.recording { background: #81233f; border-color: #b33c60; color: #fff; }
+button.audio-on { background: #315b46; border-color: #4d8b6b; color: #fff; }
 button:disabled { opacity: .45; cursor: default; }
 input[type=text], input[type=number], select {
   background: #0d1017; border: 1px solid var(--line); color: var(--text);
@@ -2865,15 +2865,36 @@ input.port { width: 90px; }
 .signal-header-actions {
   display: flex; align-items: center; gap: 6px; flex: 0 0 auto;
 }
-.panel-view-toggle {
-  padding: 5px 7px; min-width: 44px; font-size: 10px; line-height: 1;
+.panel-view-dot {
+  position: absolute; top: 9px; left: 9px; z-index: 3;
+  width: 13px; height: 13px; min-width: 13px;
+  padding: 0; border: 0; border-radius: 50%;
+  display: grid; place-items: center;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.18);
+}
+.signal-panel.view-full .panel-view-dot { background: #f5bf4f; }
+.signal-panel.view-mini .panel-view-dot { background: #61c554; }
+.panel-view-dot::after {
+  color: rgba(29,32,39,.78);
+  font-size: 11px; font-weight: 800; line-height: 1;
+}
+.signal-panel.view-full .panel-view-dot::after { content: "−"; }
+.signal-panel.view-mini .panel-view-dot::after { content: "+"; }
+.signal-panel-header { padding-left: 31px; }
+
+.audio-icon {
+  width: 31px; height: 31px; min-width: 31px;
+  padding: 0; border-radius: 50%;
+  display: inline-grid; place-items: center;
+  font-size: 16px; line-height: 1;
   color: var(--muted); background: transparent;
 }
-.panel-view-toggle:hover { color: var(--text); background: var(--soft); }
+.audio-icon.audio-on {
+  color: #fff; background: #315b46; border-color: #4d8b6b;
+}
 .signal-collapse-device { display: none; }
 
-/* Three per-panel density states. Full is the existing card. Mini keeps only
-   the signal name and a small live graph. Name keeps only identity. */
+/* Mini retains the same footprint as before, but keeps source identity and audio. */
 .signal-panel.view-mini {
   grid-column: span 4 !important;
   display: grid;
@@ -2883,7 +2904,7 @@ input.port { width: 90px; }
 }
 .signal-panel.view-mini .signal-panel-header {
   grid-column: 1;
-  padding: 9px 7px 9px 10px;
+  padding: 9px 7px 9px 31px;
   align-items: center;
 }
 .signal-panel.view-mini .signal-title-row { gap: 0; }
@@ -2891,13 +2912,25 @@ input.port { width: 90px; }
   font-size: 14px !important;
   line-height: 1.18;
 }
+.signal-panel.view-mini .signal-collapse-device {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.2;
+}
 .signal-panel.view-mini .kind-badge,
 .signal-panel.view-mini .source-chips,
 .signal-panel.view-mini .signal-glance,
-.signal-panel.view-mini .signal-tech,
-.signal-panel.view-mini .signal-collapse-device,
-.signal-panel.view-mini [id^="audio_"] {
+.signal-panel.view-mini .signal-tech {
   display: none;
+}
+.signal-panel.view-mini .signal-header-actions {
+  gap: 3px;
+}
+.signal-panel.view-mini .audio-icon {
+  width: 27px; height: 27px; min-width: 27px;
+  font-size: 14px;
 }
 .signal-panel.view-mini canvas {
   grid-column: 2;
@@ -2906,43 +2939,7 @@ input.port { width: 90px; }
   margin: 8px 10px 8px 0;
   border-radius: 7px;
 }
-.signal-panel.view-mini .panel-view-toggle {
-  min-width: 36px; padding: 4px 5px;
-}
-
-.signal-panel.view-name {
-  grid-column: span 3 !important;
-  min-height: 58px;
-}
-.signal-panel.view-name .signal-panel-header {
-  padding: 9px 10px;
-  align-items: center;
-}
-.signal-panel.view-name .signal-title-row { gap: 0; }
-.signal-panel.view-name .signal-title {
-  font-size: 14px !important;
-  line-height: 1.15;
-}
-.signal-panel.view-name .signal-collapse-device {
-  display: block;
-  margin-top: 3px;
-  color: var(--muted);
-  font-size: 10px;
-  line-height: 1.2;
-}
-.signal-panel.view-name .kind-badge,
-.signal-panel.view-name .source-chips,
-.signal-panel.view-name .signal-glance,
-.signal-panel.view-name .signal-tech,
-.signal-panel.view-name canvas,
-.signal-panel.view-name [id^="audio_"] {
-  display: none;
-}
-.signal-panel.view-name .panel-view-toggle {
-  min-width: 38px; padding: 4px 5px;
-}
-.signal-panel.view-mini.offline,
-.signal-panel.view-name.offline { display: none; }
+.signal-panel.view-mini.offline { display: none; }
 .kind-badge {
   display: inline-flex; align-items: center; gap: 5px;
   border: 1px solid var(--line); border-radius: 999px;
@@ -3037,10 +3034,8 @@ canvas {
 .camera-lab:not(.active) .camera-off-hint { display: inline; }
 .camera-lab.active .camera-off-hint { display: none; }
 .camera-lab-grid {
-  display: grid;
-  grid-template-columns: minmax(0,1fr) minmax(0,1fr);
-  gap: 12px;
-  margin-top: 12px;
+  display: block;
+  margin-top: 10px;
 }
 .camera-view {
   position: relative;
@@ -3072,7 +3067,17 @@ canvas {
   display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
   margin-top: 12px;
 }
-.camera-controls input[type=range] { width: 180px; }
+.camera-controls.before-video {
+  margin: 12px 0 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--soft);
+}
+.camera-controls input[type=range] { width: 150px; }
+.camera-magnify-toggle.active {
+  background: #4338ca; border-color: #635bdf; color: #fff;
+}
 .camera-note {
   margin-top: 10px;
   padding: 9px 10px;
@@ -3097,17 +3102,38 @@ canvas {
   gap: 12px; flex-wrap: wrap;
   margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line);
 }
-.device-view-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
-.device-view-button {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 6px 9px; font-size: 12px; color: var(--muted);
-  background: transparent;
+.device-view-buttons { display: flex; gap: 7px; flex-wrap: wrap; }
+.device-view-switch {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 6px 8px; font-size: 12px;
+  color: var(--muted); background: transparent;
+  border-color: transparent;
 }
-.device-view-button.enabled { color: var(--text); background: var(--soft); }
-.device-view-button .source-swatch { width: 9px; height: 9px; }
-.device-view-state { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
-.device-view-button:not(.enabled) .device-view-state { color: var(--bad); }
-.device-view-button.enabled .device-view-state { color: var(--good); }
+.device-view-switch.enabled {
+  color: var(--text);
+  background: var(--soft);
+  border-color: var(--line);
+}
+.device-view-switch:not(.enabled) {
+  opacity: .58;
+}
+.device-view-switch .source-swatch { width: 9px; height: 9px; }
+.switch-track {
+  width: 34px; height: 20px; padding: 2px;
+  border-radius: 999px;
+  background: #515866;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+  transition: background .14s ease;
+}
+.switch-knob {
+  display: block; width: 16px; height: 16px;
+  border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,.28);
+  transform: translateX(0);
+  transition: transform .14s ease;
+}
+.device-view-switch.enabled .switch-track { background: #34c759; }
+.device-view-switch.enabled .switch-knob { transform: translateX(14px); }
 .camera-lab.view-hidden { display: none; }
 .filter-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
 .filter-button { padding: 6px 10px; font-size: 12px; color: var(--muted); }
@@ -3179,7 +3205,7 @@ canvas {
   border-radius: 14px; color: var(--muted); text-align: center;
 }
 @media (max-width: 900px) {
-  .signal-panel, .signal-panel.comparison, .signal-panel.view-mini, .signal-panel.view-name,
+  .signal-panel, .signal-panel.comparison, .signal-panel.view-mini,
   .half, .device-card { grid-column: span 12 !important; }
   .signal-panel.view-mini {
     grid-template-columns: minmax(130px,.8fr) minmax(150px,1.2fr);
@@ -3208,7 +3234,7 @@ canvas {
   </div>
 
   <nav class="tabs" aria-label="Biofeedback Play sections">
-    <button class="tab-button active" data-tab="use">Use devices</button>
+    <button class="tab-button active" data-tab="use">Live data</button>
     <button class="tab-button" data-tab="setup">Device setup</button>
   </nav>
 
@@ -3236,7 +3262,6 @@ canvas {
               <button class="filter-button" data-signal-filter="calculated">Derived</button>
               <button class="filter-button" data-signal-filter="comparison">Comparisons</button>
             </div>
-            <div class="layout-hint" style="margin-top:7px">Only live signals from enabled device views appear below.</div>
           </div>
           <div class="legend" aria-label="Panel legend">
             <span class="legend-item"><span class="legend-mark"></span>Direct sensor data</span>
@@ -3247,7 +3272,6 @@ canvas {
         <div class="device-view-controls">
           <div>
             <div class="label">Device views</div>
-            <div class="layout-hint" style="margin-top:4px">Choose which devices may appear here, even while they are unplugged.</div>
           </div>
           <div id="deviceViewButtons" class="device-view-buttons"></div>
         </div>
@@ -3260,9 +3284,7 @@ canvas {
           <div>
             <div class="label">Optional input · Camera</div>
             <h2 style="margin-top:4px">Camera pulse experiment</h2>
-            <div class="small camera-off-hint" style="margin-top:4px">
-              Off. Start it only when you specifically want to work on camera-derived pulse.
-            </div>
+            <div class="small camera-off-hint" style="margin-top:4px">Camera off.</div>
           </div>
           <div class="row">
             <span class="status-pill"><span id="cameraDot" class="dot"></span><span id="cameraStatus">Camera off</span></span>
@@ -3270,36 +3292,42 @@ canvas {
           </div>
         </div>
         <div class="camera-lab-details">
-          <div class="small" style="margin-top:10px">
-            Align your face with the guides. Processing stays local. This is a tuning workspace, not a primary device panel.
-          </div>
+          <div class="small" style="margin-top:10px">Align your face with the sampling guides. Processing stays local.</div>
           <video id="cameraVideo" playsinline muted></video>
-          <div class="camera-lab-grid">
-            <div class="camera-view">
-              <div class="camera-view-label">Normal + sampling guides</div>
-              <canvas id="cameraSourceCanvas" width="320" height="240"></canvas>
-            </div>
-            <div class="camera-view">
-              <div class="camera-view-label">Heartbeat-band color magnification (optional)</div>
-              <canvas id="cameraMagnifiedCanvas" width="320" height="240"></canvas>
-            </div>
-          </div>
-          <div class="camera-controls">
-            <label class="small">
-              <input id="cameraMagnifyEnabled" type="checkbox">
-              Magnified view (extra CPU)
-            </label>
+
+          <div class="camera-controls before-video">
+            <button id="cameraMagnifyToggle" class="camera-magnify-toggle" aria-pressed="false">Magnified view</button>
             <label class="small">Magnification
               <input id="cameraGain" type="range" min="0" max="40" step="1" value="12">
               <strong id="cameraGainValue">12×</strong>
             </label>
+            <label class="small">Guide size
+              <input id="cameraGuideScale" type="range" min="70" max="140" step="2" value="100">
+              <strong id="cameraGuideScaleValue">100%</strong>
+            </label>
+            <label class="small">Guide left/right
+              <input id="cameraGuideX" type="range" min="-20" max="20" step="1" value="0">
+              <strong id="cameraGuideXValue">center</strong>
+            </label>
+            <label class="small">Guide up/down
+              <input id="cameraGuideY" type="range" min="-20" max="20" step="1" value="0">
+              <strong id="cameraGuideYValue">center</strong>
+            </label>
+          </div>
+
+          <div class="camera-lab-grid">
+            <div class="camera-view">
+              <div id="cameraViewLabel" class="camera-view-label">Normal + sampling guides</div>
+              <canvas id="cameraSourceCanvas" width="320" height="240"></canvas>
+            </div>
+          </div>
+
+          <div class="camera-controls">
             <span class="small">Camera pulse: <strong id="cameraPpgValue" class="camera-live-value">—</strong></span>
             <span class="small">Motion: <strong id="cameraMotionValue" class="camera-live-value">—</strong></span>
             <span class="small">Signal quality: <strong id="cameraQualityValue" class="camera-live-value">—</strong></span>
           </div>
-          <div class="camera-note small">
-            Tuning mode shows pulse waveform, motion, signal quality, pulse amplitude, and conservative spectral heart rate. HRV, coherence, respiration, and beat-to-beat camera panels stay hidden until validated against a contact sensor.
-          </div>
+          <div class="camera-note small">Camera HRV and coherence remain hidden until timing is validated against a contact sensor.</div>
         </div>
       </section>
     </div>
@@ -3312,7 +3340,7 @@ canvas {
           <div>
             <div class="label">Configured devices</div>
             <div class="small" style="margin-top:6px">
-              Connection and acquisition controls live here. Signal panels stay on the Use devices tab.
+              Start, stop, and configure connected devices here.
             </div>
           </div>
         </div>
@@ -3336,8 +3364,8 @@ canvas {
       <section class="card half">
         <div class="label">About audio feedback</div>
         <div class="small" style="margin-top:6px">
-          Each signal panel has its own Audio button. Audio is generated locally in the browser.
-          It is a sonification of the incoming signal, not a reconstructed heartbeat or diagnostic sound.
+          Each signal panel has a speaker icon for sonification. Audio is generated locally in the browser.
+          It follows the incoming signal; it is not a reconstructed heartbeat or diagnostic sound.
         </div>
       </section>
 
@@ -3408,6 +3436,7 @@ let cameraLastPostAt = 0;
 let cameraLastSampleTimestamp = null;
 let cameraQualityHistory = [];
 let cameraRgbHistory = [];
+let cameraMagnificationOn = false;
 
 function loadDeviceViewState() {
   try {
@@ -3487,13 +3516,11 @@ function savePanelViewState() {
 
 function panelViewMode(signalId) {
   const mode = panelViewState[signalId];
-  return mode === "mini" || mode === "name" ? mode : "full";
+  return mode === "mini" || mode === "name" ? "mini" : "full";
 }
 
 function nextPanelViewMode(mode) {
-  if (mode === "full") return "mini";
-  if (mode === "mini") return "name";
-  return "full";
+  return mode === "full" ? "mini" : "full";
 }
 
 function cyclePanelView(signalId) {
@@ -3508,23 +3535,16 @@ function cyclePanelView(signalId) {
   const panel = document.getElementById("panel_" + domId(signalId));
   if (!panel) return;
 
-  panel.classList.remove("view-full", "view-mini", "view-name");
+  panel.classList.remove("view-full", "view-mini");
   panel.classList.add("view-" + next);
   const button = panel.querySelector("[data-panel-view-toggle]");
   if (button) {
-    const labels = {full: "Full", mini: "Mini", name: "Name"};
-    button.textContent = labels[next];
-    button.title =
-      "Panel view: " + labels[next] + ". Click for " +
-      labels[nextPanelViewMode(next)].toLowerCase() + " view.";
-    button.setAttribute(
-      "aria-label",
-      "Panel view is " + labels[next] + ". Click for " +
-      labels[nextPanelViewMode(next)].toLowerCase() + " view."
-    );
+    const action = next === "full" ? "Collapse panel" : "Expand panel";
+    button.title = action;
+    button.setAttribute("aria-label", action);
   }
   requestAnimationFrame(function() {
-    if (next !== "name") drawSignal(signal);
+    drawSignal(signal);
   });
 }
 
@@ -3649,11 +3669,37 @@ function visibleSignals(signals) {
 
 
 function cameraRectangles(width, height) {
-  return [
-    {x: Math.round(width * .34), y: Math.round(height * .17), w: Math.round(width * .32), h: Math.round(height * .15)},
-    {x: Math.round(width * .27), y: Math.round(height * .52), w: Math.round(width * .16), h: Math.round(height * .17)},
-    {x: Math.round(width * .57), y: Math.round(height * .52), w: Math.round(width * .16), h: Math.round(height * .17)}
+  const scaleControl = document.getElementById("cameraGuideScale");
+  const xControl = document.getElementById("cameraGuideX");
+  const yControl = document.getElementById("cameraGuideY");
+  const scale = Math.max(.7, Math.min(1.4, Number(scaleControl ? scaleControl.value : 100) / 100));
+  const xShift = Math.max(-.2, Math.min(.2, Number(xControl ? xControl.value : 0) / 100));
+  const yShift = Math.max(-.2, Math.min(.2, Number(yControl ? yControl.value : 0) / 100));
+  const centerX = .5 + xShift;
+  const centerY = .43 + yShift;
+  const base = [
+    {x: .34, y: .17, w: .32, h: .15},
+    {x: .27, y: .52, w: .16, h: .17},
+    {x: .57, y: .52, w: .16, h: .17}
   ];
+  return base.map(function(rect) {
+    const rectCenterX = rect.x + rect.w / 2;
+    const rectCenterY = rect.y + rect.h / 2;
+    const scaledCenterX = centerX + (rectCenterX - .5) * scale;
+    const scaledCenterY = centerY + (rectCenterY - .43) * scale;
+    const w = rect.w * scale;
+    const h = rect.h * scale;
+    return {
+      x: Math.round(width * (scaledCenterX - w / 2)),
+      y: Math.round(height * (scaledCenterY - h / 2)),
+      w: Math.round(width * w),
+      h: Math.round(height * h)
+    };
+  }).map(function(rect) {
+    rect.x = Math.max(0, Math.min(width - rect.w, rect.x));
+    rect.y = Math.max(0, Math.min(height - rect.h, rect.y));
+    return rect;
+  });
 }
 
 function cameraFilterAlpha(cutoffHz, dtSeconds) {
@@ -3824,9 +3870,7 @@ function cameraAnalyzeFrame(timestamp) {
   if (!video || video.readyState < 2) return;
 
   const source = document.getElementById("cameraSourceCanvas");
-  const magnified = document.getElementById("cameraMagnifiedCanvas");
   const sourceCtx = source.getContext("2d", {willReadFrequently: true});
-  const magCtx = magnified.getContext("2d");
   const width = source.width;
   const height = source.height;
 
@@ -3905,7 +3949,7 @@ function cameraAnalyzeFrame(timestamp) {
   const motion = motionCount ? 100 * motionSum / motionCount / 255 : 0;
   cameraPreviousFrame = new Uint8ClampedArray(data);
 
-  const magnifyEnabled = document.getElementById("cameraMagnifyEnabled").checked;
+  const magnifyEnabled = Boolean(cameraMagnificationOn);
   const gain = magnifyEnabled
     ? Number(document.getElementById("cameraGain").value || 0)
     : 0;
@@ -3947,15 +3991,12 @@ function cameraAnalyzeFrame(timestamp) {
         }
       }
     });
-    magCtx.putImageData(output, 0, 0);
+    sourceCtx.putImageData(output, 0, 0);
   } else {
     cameraPixelFast = null;
     cameraPixelSlow = null;
-    magCtx.clearRect(0, 0, width, height);
-    magCtx.drawImage(source, 0, 0);
   }
   drawCameraGuides(sourceCtx, width, height);
-  drawCameraGuides(magCtx, width, height);
 
   const quality = cameraQualityScore(ppg, motion);
   document.getElementById("cameraPpgValue").textContent = ppg.toFixed(2);
@@ -4049,11 +4090,13 @@ function renderDeviceViewControls(devices) {
   host.innerHTML = devices.map(function(device) {
     const enabled = deviceViewEnabled(device.id);
     const live = Boolean(device.connected && device.running);
-    return '<button class="device-view-button ' + (enabled ? 'enabled' : '') +
-      '" data-device-view="' + escapeHtml(device.id) + '" aria-pressed="' + String(enabled) + '">' +
+    return '<button class="device-view-switch ' + (enabled ? 'enabled' : '') +
+      '" data-device-view="' + escapeHtml(device.id) +
+      '" role="switch" aria-checked="' + String(enabled) +
+      '" title="' + escapeHtml(device.name + (live ? " · live" : "")) + '">' +
       '<span class="source-swatch" style="--source-color:' + escapeHtml(deviceColor(device.id)) + '"></span>' +
       '<span>' + escapeHtml(device.name) + '</span>' +
-      '<span class="device-view-state">' + (enabled ? (live ? 'Live' : 'On') : 'Off') + '</span>' +
+      '<span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>' +
       '</button>';
   }).join("");
 
@@ -4124,10 +4167,38 @@ document.getElementById("cameraToggle").onclick = function() {
   if (cameraStream) cameraStopLocal();
   else cameraStartLocal();
 };
+document.getElementById("cameraMagnifyToggle").onclick = function() {
+  cameraMagnificationOn = !cameraMagnificationOn;
+  const button = document.getElementById("cameraMagnifyToggle");
+  button.classList.toggle("active", cameraMagnificationOn);
+  button.setAttribute("aria-pressed", String(cameraMagnificationOn));
+  document.getElementById("cameraViewLabel").textContent =
+    cameraMagnificationOn ? "Magnified pulse-band view + sampling guides" : "Normal + sampling guides";
+  if (!cameraMagnificationOn) {
+    cameraPixelFast = null;
+    cameraPixelSlow = null;
+  }
+};
 document.getElementById("cameraGain").oninput = function() {
   document.getElementById("cameraGainValue").textContent =
     String(document.getElementById("cameraGain").value) + "×";
 };
+document.getElementById("cameraGuideScale").oninput = function() {
+  document.getElementById("cameraGuideScaleValue").textContent =
+    String(document.getElementById("cameraGuideScale").value) + "%";
+};
+function updateCameraGuideAxis(inputId, outputId, negativeWord, positiveWord) {
+  const input = document.getElementById(inputId);
+  const output = document.getElementById(outputId);
+  input.oninput = function() {
+    const value = Number(input.value);
+    output.textContent = value === 0
+      ? "center"
+      : Math.abs(value) + "% " + (value < 0 ? negativeWord : positiveWord);
+  };
+}
+updateCameraGuideAxis("cameraGuideX", "cameraGuideXValue", "left", "right");
+updateCameraGuideAxis("cameraGuideY", "cameraGuideYValue", "up", "down");
 
 
 
@@ -4194,8 +4265,7 @@ function renderSignalCard(signal) {
   const id = domId(signal.id);
   const kind = signalKind(signal);
   const viewMode = panelViewMode(signal.id);
-  const viewLabels = {full: "Full", mini: "Mini", name: "Name"};
-  const nextView = nextPanelViewMode(viewMode);
+  const panelAction = viewMode === "full" ? "Collapse panel" : "Expand panel";
   const sourceIds = signalSourceIds(signal);
   const sourceNames = signal.data_sources || [signal.device_name];
   const sourceChips = kind === "comparison" ? sourceNames.map(function(name, index) {
@@ -4210,6 +4280,8 @@ function renderSignalCard(signal) {
       '" class="signal-panel ' + kind + ' view-' + viewMode +
       '" style="--device-accent:' + escapeHtml(deviceColor(signal.device_id)) +
       ';--panel-accent:' + escapeHtml(accent) + '">' +
+      '<button class="panel-view-dot" data-panel-view-toggle="' + escapeHtml(signal.id) +
+        '" title="' + panelAction + '" aria-label="' + panelAction + '"></button>' +
       '<div class="signal-panel-header">' +
         '<div class="signal-title-block">' +
           '<div class="signal-title-row">' +
@@ -4220,12 +4292,7 @@ function renderSignalCard(signal) {
           (kind === "comparison" ? '<div class="source-chips">' + sourceChips + '</div>' : '') +
         '</div>' +
         '<div class="signal-header-actions">' +
-          '<button id="audio_' + id + '" disabled>Audio</button>' +
-          '<button class="panel-view-toggle" data-panel-view-toggle="' + escapeHtml(signal.id) + '"' +
-            ' title="Panel view: ' + viewLabels[viewMode] + '. Click for ' + viewLabels[nextView].toLowerCase() + ' view."' +
-            ' aria-label="Panel view is ' + viewLabels[viewMode] + '. Click for ' + viewLabels[nextView].toLowerCase() + ' view.">' +
-            viewLabels[viewMode] +
-          '</button>' +
+          '<button id="audio_' + id + '" class="audio-icon" disabled aria-label="Turn audio on" title="Turn audio on">🔇</button>' +
         '</div>' +
       '</div>' +
       '<div class="signal-glance">' +
@@ -4266,7 +4333,7 @@ function renderSignalPanels(signals) {
     const anyEnabledConnected = catalog.devices.some(function(device) {
       return device.connected && device.running && deviceViewEnabled(device.id);
     });
-    let hint = "Connect a sensor, or start the optional Camera experiment below.";
+    let hint = "Connect a sensor or start the camera.";
     if (anyConnected && !anyEnabledConnected) {
       hint = "A device is connected, but its view is turned off. Use Device views above to show it.";
     }
@@ -4476,8 +4543,10 @@ function updateSignalPanels(signals) {
     audioButton.disabled = !live;
     const state = ensureSignalState(signal);
     if (!live && state.audioOn) stopAudio(signal.id);
-    audioButton.textContent = state.audioOn ? "Audio off" : "Audio on";
-    audioButton.className = state.audioOn ? "audio-on" : "";
+    audioButton.textContent = state.audioOn ? "🔊" : "🔇";
+    audioButton.className = state.audioOn ? "audio-icon audio-on" : "audio-icon";
+    audioButton.setAttribute("aria-label", state.audioOn ? "Mute audio" : "Turn audio on");
+    audioButton.title = state.audioOn ? "Mute audio" : "Turn audio on";
 
     document.getElementById("count_" + id).textContent =
       Number(signal.sample_count || 0).toLocaleString();
@@ -4528,7 +4597,7 @@ function renderDeviceSetup(devices) {
       deviceSpecific =
         '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">' +
           '<div class="label">Camera control</div>' +
-          '<div class="small" style="margin-top:6px">Camera permission and start/stop controls live on the Use devices tab because browser camera access requires a user gesture. Video processing stays local in the page.</div>' +
+          '<div class="small" style="margin-top:6px">Start or stop the camera from Live data. Video processing stays local.</div>' +
         '</div>';
     }
     if (device.id === "emwave" || /^emwave[2-4]$/.test(device.id)) {
