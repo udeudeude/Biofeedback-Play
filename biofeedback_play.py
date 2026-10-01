@@ -4659,14 +4659,27 @@ function renderDeviceSetup(devices) {
     }
     if (device.id === "muse") {
       const currentPort = device.port || "";
-      let options = '<option value="">Select Muse serial port</option>';
-      musePorts.forEach(function(port) {
-        const selected = port.device === currentPort ? " selected" : "";
-        const label = port.device + (port.description ? " · " + port.description : "") +
-          (port.likely_muse ? " · likely Muse" : "");
-        options += '<option value="' + escapeHtml(port.device) + '"' + selected + '>' +
+      let options = '<option value="">Select Muse connection</option>';
+      const serialConnections = musePorts.filter(function(item) { return item.kind !== "bluetooth"; });
+      const bluetoothConnections = musePorts.filter(function(item) { return item.kind === "bluetooth"; });
+
+      function optionHtml(item) {
+        const selected = item.device === currentPort ? " selected" : "";
+        const name = item.bluetooth_name || item.device;
+        const label = name + (item.description ? " · " + item.description : "") +
+          (item.likely_muse ? " · likely Muse" : "");
+        return '<option value="' + escapeHtml(item.device) + '"' + selected + '>' +
           escapeHtml(label) + '</option>';
-      });
+      }
+
+      if (bluetoothConnections.length) {
+        options += '<optgroup label="Paired Bluetooth devices">' +
+          bluetoothConnections.map(optionHtml).join("") + '</optgroup>';
+      }
+      if (serialConnections.length) {
+        options += '<optgroup label="Serial ports">' +
+          serialConnections.map(optionHtml).join("") + '</optgroup>';
+      }
 
       const battery = device.battery && device.battery.percentage != null
         ? Number(device.battery.percentage).toFixed(1) + "%"
@@ -4679,23 +4692,27 @@ function renderDeviceSetup(devices) {
       const museServices = device.rfcomm_services ? escapeHtml(device.rfcomm_services) : "—";
       const museChannel = device.rfcomm_channel != null ? String(device.rfcomm_channel) : "—";
       const musePassiveProbe = device.passive_probe ? escapeHtml(device.passive_probe) : "—";
+      const museTrace = Array.isArray(device.trace) ? device.trace : [];
+      const museTraceText = museTrace.length
+        ? museTrace.map(function(line) { return escapeHtml(line); }).join("\n")
+        : "No connection trace yet.";
       const museAttemptState = device.attempt_state || "idle";
       const museElapsed = Math.max(0, Math.round(Number(device.stage_elapsed_s || 0)));
       const museRetry = Math.max(0, Number(device.retry_seconds || 0));
       let museAttemptClass = "working";
       let museAttemptTitle = "Working…";
       let museAttemptDetail =
-        "Biofeedback Play is still testing the Muse. You do not need to send a screenshot yet.";
+        "Testing the selected connection. The trace below updates as each stage completes.";
 
       if (device.connected) {
         museAttemptClass = "live";
         museAttemptTitle = "Connected";
-        museAttemptDetail = "Muse data is arriving. No troubleshooting screenshot is needed.";
+        museAttemptDetail = "Muse EEG or motion data is arriving.";
       } else if (museAttemptState === "failed") {
         museAttemptClass = "failed";
-        museAttemptTitle = "Attempt finished — send a screenshot now";
+        museAttemptTitle = "Connection attempt finished";
         museAttemptDetail =
-          "This diagnostic pass is complete and has stopped. Biofeedback Play will not retry until you click Start acquisition.";
+          "The attempt stopped after a failure. The trace below shows the last successful stage and the reported error.";
       } else if (museAttemptState === "stopped") {
         museAttemptClass = "";
         museAttemptTitle = "Acquisition stopped";
@@ -4703,7 +4720,7 @@ function renderDeviceSetup(devices) {
       } else if (museAttemptState === "idle") {
         museAttemptClass = "";
         museAttemptTitle = "Waiting";
-        museAttemptDetail = "Biofeedback Play is waiting for the selected Muse serial port.";
+        museAttemptDetail = "Select a Muse serial port or paired Bluetooth device.";
       } else {
         museAttemptDetail =
           "Still working on this connection attempt · current step has been running for " +
@@ -4712,22 +4729,24 @@ function renderDeviceSetup(devices) {
 
       const portSummary = musePorts.length
         ? musePorts.map(function(port) {
-            return '<div class="mono">' + escapeHtml(port.device) +
+            const name = port.bluetooth_name || port.device;
+            return '<div class="mono">' + escapeHtml(name) +
+              (port.hwid ? ' · ' + escapeHtml(port.hwid) : '') +
               (port.likely_muse ? ' <span class="badge">likely Muse</span>' : '') +
               '</div>';
           }).join("")
-        : '<div class="small">No serial ports found in the last scan.</div>';
+        : '<div class="small">No Muse connection targets found in the last scan.</div>';
 
       deviceSpecific =
         '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">' +
           '<div class="label">Muse Bluetooth setup</div>' +
           '<div class="small" style="margin-top:6px">' +
-            'MU-01 uses classic Bluetooth serial. Pair a device named Muse-… in macOS Bluetooth settings, then scan for its serial port.' +
+            'MU-01 uses classic Bluetooth RFCOMM. Select either its macOS serial endpoint or the paired Bluetooth device directly. A generic paired name such as Watch can still be selected manually.' +
           '</div>' +
           '<div class="row" style="margin-top:10px">' +
             '<select id="musePortSelect">' + options + '</select>' +
-            '<button id="museSavePort">Use selected port</button>' +
-            '<button id="museScanPorts">Scan serial ports</button>' +
+            '<button id="museSavePort">Use selected connection</button>' +
+            '<button id="museScanPorts">Scan Muse connections</button>' +
             '<button id="museBluetoothSettings">Open Bluetooth settings</button>' +
           '</div>' +
           '<div class="muse-attempt ' + museAttemptClass + '">' +
@@ -4738,9 +4757,9 @@ function renderDeviceSetup(devices) {
             escapeHtml(musePortScanStatus) +
           '</div>' +
           '<div class="device-meta small" style="margin-top:8px">' +
-            '<div><strong>Serial ports found:</strong> ' + musePorts.length + '</div>' +
+            '<div><strong>Connection targets found:</strong> ' + musePorts.length + '</div>' +
             portSummary +
-            '<div><strong>Selected port:</strong> <span class="mono">' + escapeHtml(currentPort || "none") + '</span></div>' +
+            '<div><strong>Selected connection:</strong> <span class="mono">' + escapeHtml(currentPort || "none") + '</span></div>' +
             '<div><strong>Connection stage:</strong> ' + museStage + '</div>' +
             '<div><strong>Active transport:</strong> ' + museTransport + '</div>' +
             '<div><strong>Advertised RFCOMM services:</strong> <span class="mono">' + museServices + '</span></div>' +
@@ -4753,6 +4772,10 @@ function renderDeviceSetup(devices) {
             '<div><strong>EEG samples:</strong> ' + Number(device.eeg_sample_count || 0).toLocaleString() +
               ' · <strong>Accelerometer samples:</strong> ' + Number(device.accel_sample_count || 0).toLocaleString() + '</div>' +
           '</div>' +
+          '<div class="row" style="margin-top:10px">' +
+            '<button id="museCopyTrace">Copy Muse trace</button>' +
+          '</div>' +
+          '<pre id="museTrace" class="muse-trace">' + museTraceText + '</pre>' +
         '</div>';
     }
 
