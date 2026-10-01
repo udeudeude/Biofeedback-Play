@@ -14,7 +14,7 @@ Up to four emWave USB modules can be opened simultaneously. Additional units are
 
 The browser interface has two primary tabs.
 
-### Use devices
+### Live data
 
 This is the live-feedback workspace.
 
@@ -28,13 +28,13 @@ Inside each device section:
 - Technical material such as recent range, sample count, OSC address, detailed definition, and nominal rate is tucked under **Details & technical information**.
 - Cross-device calculations live in their own **Cross-device comparisons** section rather than being mixed into the source-device groups.
 
-Disconnected devices remain available under **Device setup** instead of occupying the live workspace. A persistent **Device views** row on the live page lets you turn each configured device's view on or off even while that device is unplugged; the preference is remembered in the browser. All four emWave slots are available there before connection.
+Disconnected devices remain available under **Device setup** instead of occupying the live workspace. The **Device views** row uses persistent iOS-style switches so each configured source can be included or excluded even while unplugged. All four emWave slots are available before connection.
 
 The optional camera experiment sits below the live signal groups and remains compact while off. Its full camera workspace appears only after the camera is started. Turning the Camera view off also stops a running browser-camera session so it cannot consume processor time invisibly.
 
 The top bar includes a persistent **Light mode / Dark mode** switch. The selected theme is remembered in the browser.
 
-Each live panel has an independent **Audio** control. Audio is generated locally with the Web Audio API. It is sonification, not a reconstructed heartbeat or diagnostic sound.
+Each live panel has a speaker icon that toggles sonification. Audio is generated locally with the Web Audio API and stops automatically if the source disappears. Panels can be toggled between **Full** and **Mini** views; Mini keeps the source device, speaker control, and compact live graph.
 
 ### Visual language
 
@@ -223,18 +223,18 @@ Raw measurements remain visible beside derived quantities. Derived metrics are e
 
 Biofeedback Play includes a local browser-camera experiment inspired by remote photoplethysmography and video color magnification.
 
-The **Camera lab** on the Use devices tab can:
+The **Camera lab** on the Live data tab can:
 
 - request the Mac camera only after the user presses Start camera
 - keep video entirely in the local browser page
-- show a normal mirrored preview with forehead and lower-cheek sampling guides
+- show one mirrored preview with adjustable forehead and lower-cheek sampling guides
 - reject very dark, clipped, and extreme-color pixels from those guided regions
 - combine recent red, green, and blue changes with a POS-style remote-PPG transform
 - band-pass that waveform around approximately 0.7–3 Hz
 - compute a frame-to-frame facial-motion waveform as an artifact channel
 - show a local periodicity-versus-motion quality estimate
-- optionally show heartbeat-band color magnification inside the guided skin regions
-- leave the expensive magnified view off by default to reduce browser CPU use
+- optionally switch that same preview to heartbeat-band color magnification inside the guided skin regions
+- adjust guide size and horizontal/vertical placement without moving the user or computer
 
 For now the camera workspace is deliberately in **tuning mode**. It shows only the signals useful for deciding whether extraction is improving:
 
