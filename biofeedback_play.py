@@ -2865,22 +2865,35 @@ input.port { width: 90px; }
 .signal-header-actions {
   display: flex; align-items: center; gap: 6px; flex: 0 0 auto;
 }
-.panel-view-dot {
-  position: absolute; top: 9px; left: 9px; z-index: 3;
-  width: 13px; height: 13px; min-width: 13px;
-  padding: 0; border: 0; border-radius: 50%;
+.panel-size-control {
+  position: absolute; top: 8px; left: 9px; z-index: 3;
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+}
+.panel-size-button {
+  width: 22px; height: 20px; min-width: 22px;
+  padding: 0; border: 0; border-radius: 5px;
   display: grid; place-items: center;
-  box-shadow: inset 0 0 0 1px rgba(0,0,0,.18);
+  color: var(--muted); background: transparent;
 }
-.signal-panel.view-full .panel-view-dot { background: #f5bf4f; }
-.signal-panel.view-mini .panel-view-dot { background: #61c554; }
-.panel-view-dot::after {
-  color: rgba(29,32,39,.78);
-  font-size: 11px; font-weight: 800; line-height: 1;
+.panel-size-button:hover { background: var(--soft); color: var(--text); }
+.panel-size-button.active {
+  background: var(--device-accent);
+  color: #10131b;
 }
-.signal-panel.view-full .panel-view-dot::after { content: "−"; }
-.signal-panel.view-mini .panel-view-dot::after { content: "+"; }
-.signal-panel-header { padding-left: 31px; }
+.panel-size-glyph {
+  display: block;
+  height: 7px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+.panel-size-button[data-panel-size="standard"] .panel-size-glyph { width: 10px; }
+.panel-size-button[data-panel-size="mini"] .panel-size-glyph { width: 6px; height: 5px; }
+.panel-size-button[data-panel-size="wide"] .panel-size-glyph { width: 15px; }
+.signal-panel-header { padding-left: 84px; }
 
 .audio-icon {
   width: 31px; height: 31px; min-width: 31px;
@@ -2894,7 +2907,10 @@ input.port { width: 90px; }
 }
 .signal-collapse-device { display: none; }
 
-/* Mini retains the same footprint as before, but keeps source identity and audio. */
+.signal-panel.view-standard { grid-column: span 4 !important; }
+.signal-panel.view-wide { grid-column: span 12 !important; }
+
+/* Mini keeps the compact height, source identity, audio toggle, and live graph. */
 .signal-panel.view-mini {
   grid-column: span 4 !important;
   display: grid;
@@ -2904,7 +2920,7 @@ input.port { width: 90px; }
 }
 .signal-panel.view-mini .signal-panel-header {
   grid-column: 1;
-  padding: 9px 7px 9px 31px;
+  padding: 9px 7px 9px 84px;
   align-items: center;
 }
 .signal-panel.view-mini .signal-title-row { gap: 0; }
@@ -2925,9 +2941,7 @@ input.port { width: 90px; }
 .signal-panel.view-mini .signal-tech {
   display: none;
 }
-.signal-panel.view-mini .signal-header-actions {
-  gap: 3px;
-}
+.signal-panel.view-mini .signal-header-actions { gap: 3px; }
 .signal-panel.view-mini .audio-icon {
   width: 27px; height: 27px; min-width: 27px;
   font-size: 14px;
@@ -3205,7 +3219,8 @@ canvas {
   border-radius: 14px; color: var(--muted); text-align: center;
 }
 @media (max-width: 900px) {
-  .signal-panel, .signal-panel.comparison, .signal-panel.view-mini,
+  .signal-panel, .signal-panel.comparison, .signal-panel.view-standard,
+  .signal-panel.view-mini, .signal-panel.view-wide,
   .half, .device-card { grid-column: span 12 !important; }
   .signal-panel.view-mini {
     grid-template-columns: minmax(130px,.8fr) minmax(150px,1.2fr);
@@ -3514,20 +3529,24 @@ function savePanelViewState() {
   } catch (_) {}
 }
 
-function panelViewMode(signalId) {
-  const mode = panelViewState[signalId];
-  return mode === "mini" || mode === "name" ? "mini" : "full";
+function panelViewMode(signal) {
+  const stored = panelViewState[signal.id];
+  if (stored === "mini" || stored === "name") return "mini";
+  if (stored === "wide") return "wide";
+  if (stored === "standard") return "standard";
+
+  // Migrate the previous Full state without changing the layout users were
+  // already seeing: direct hardware streams were wide; derived/comparison
+  // panels used the smaller standard width.
+  if (stored === "full") {
+    return signalKind(signal) === "direct" ? "wide" : "standard";
+  }
+  return signalKind(signal) === "direct" ? "wide" : "standard";
 }
 
-function nextPanelViewMode(mode) {
-  return mode === "full" ? "mini" : "full";
-}
-
-function cyclePanelView(signalId) {
-  const current = panelViewMode(signalId);
-  const next = nextPanelViewMode(current);
-  if (next === "full") delete panelViewState[signalId];
-  else panelViewState[signalId] = next;
+function setPanelView(signalId, mode) {
+  if (!["standard", "mini", "wide"].includes(mode)) return;
+  panelViewState[signalId] = mode;
   savePanelViewState();
 
   const signal = catalog.signals.find(function(item) { return item.id === signalId; });
@@ -3535,14 +3554,13 @@ function cyclePanelView(signalId) {
   const panel = document.getElementById("panel_" + domId(signalId));
   if (!panel) return;
 
-  panel.classList.remove("view-full", "view-mini");
-  panel.classList.add("view-" + next);
-  const button = panel.querySelector("[data-panel-view-toggle]");
-  if (button) {
-    const action = next === "full" ? "Collapse panel" : "Expand panel";
-    button.title = action;
-    button.setAttribute("aria-label", action);
-  }
+  panel.classList.remove("view-standard", "view-mini", "view-wide");
+  panel.classList.add("view-" + mode);
+  panel.querySelectorAll("[data-panel-size]").forEach(function(button) {
+    const active = button.dataset.panelSize === mode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
   requestAnimationFrame(function() {
     drawSignal(signal);
   });
@@ -4264,8 +4282,7 @@ function renderSignalCard(signal) {
   ensureSignalState(signal);
   const id = domId(signal.id);
   const kind = signalKind(signal);
-  const viewMode = panelViewMode(signal.id);
-  const panelAction = viewMode === "full" ? "Collapse panel" : "Expand panel";
+  const viewMode = panelViewMode(signal);
   const sourceIds = signalSourceIds(signal);
   const sourceNames = signal.data_sources || [signal.device_name];
   const sourceChips = kind === "comparison" ? sourceNames.map(function(name, index) {
@@ -4280,8 +4297,23 @@ function renderSignalCard(signal) {
       '" class="signal-panel ' + kind + ' view-' + viewMode +
       '" style="--device-accent:' + escapeHtml(deviceColor(signal.device_id)) +
       ';--panel-accent:' + escapeHtml(accent) + '">' +
-      '<button class="panel-view-dot" data-panel-view-toggle="' + escapeHtml(signal.id) +
-        '" title="' + panelAction + '" aria-label="' + panelAction + '"></button>' +
+      '<div class="panel-size-control" role="group" aria-label="Panel size">' +
+        '<button class="panel-size-button ' + (viewMode === "standard" ? "active" : "") +
+          '" data-panel-size="standard" data-signal-id="' + escapeHtml(signal.id) +
+          '" aria-pressed="' + String(viewMode === "standard") +
+          '" title="Standard" aria-label="Standard panel">' +
+          '<span class="panel-size-glyph" aria-hidden="true"></span></button>' +
+        '<button class="panel-size-button ' + (viewMode === "mini" ? "active" : "") +
+          '" data-panel-size="mini" data-signal-id="' + escapeHtml(signal.id) +
+          '" aria-pressed="' + String(viewMode === "mini") +
+          '" title="Mini" aria-label="Mini panel">' +
+          '<span class="panel-size-glyph" aria-hidden="true"></span></button>' +
+        '<button class="panel-size-button ' + (viewMode === "wide" ? "active" : "") +
+          '" data-panel-size="wide" data-signal-id="' + escapeHtml(signal.id) +
+          '" aria-pressed="' + String(viewMode === "wide") +
+          '" title="Wide" aria-label="Wide panel">' +
+          '<span class="panel-size-glyph" aria-hidden="true"></span></button>' +
+      '</div>' +
       '<div class="signal-panel-header">' +
         '<div class="signal-title-block">' +
           '<div class="signal-title-row">' +
@@ -4431,9 +4463,9 @@ function renderSignalPanels(signals) {
     const button = document.getElementById("audio_" + domId(signal.id));
     if (button) button.onclick = function() { toggleAudio(signal.id); };
   });
-  grid.querySelectorAll("[data-panel-view-toggle]").forEach(function(button) {
+  grid.querySelectorAll("[data-panel-size]").forEach(function(button) {
     button.onclick = function() {
-      cyclePanelView(button.dataset.panelViewToggle);
+      setPanelView(button.dataset.signalId, button.dataset.panelSize);
     };
   });
 }

@@ -34,7 +34,7 @@ The optional camera experiment sits below the live signal groups and remains com
 
 The top bar includes a persistent **Light mode / Dark mode** switch. The selected theme is remembered in the browser.
 
-Each live panel has a speaker icon that toggles sonification. Audio is generated locally with the Web Audio API and stops automatically if the source disappears. Panels can be toggled between **Full** and **Mini** views; Mini keeps the source device, speaker control, and compact live graph.
+Each live panel has a speaker icon that toggles sonification. Audio is generated locally with the Web Audio API and stops automatically if the source disappears. Panels have three persistent sizes: **Standard** uses the normal derived-panel width, **Mini** keeps that compact width with a reduced-height live graph, and **Wide** spans the width used by direct sensor panels. Direct sensor streams default to Wide; derived and comparison panels default to Standard.
 
 ### Visual language
 

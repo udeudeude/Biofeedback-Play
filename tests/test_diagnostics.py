@@ -177,17 +177,21 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("stopAudio(signalId, false)", HTML)
         self.assertIn("stopUnavailableAudio();", HTML)
 
-    def test_signal_panels_have_persistent_full_and_mini_views(self):
+    def test_signal_panels_have_persistent_standard_mini_wide_views(self):
         self.assertIn("biofeedbackPlay.panelViews.v1", HTML)
-        self.assertIn("view-full", HTML)
+        self.assertIn("view-standard", HTML)
         self.assertIn("view-mini", HTML)
+        self.assertIn("view-wide", HTML)
         self.assertNotIn("view-name", HTML)
-        self.assertIn("data-panel-view-toggle", HTML)
-        self.assertIn("panel-view-dot", HTML)
+        self.assertNotIn("view-full", HTML)
+        self.assertIn("panel-size-control", HTML)
+        self.assertIn('data-panel-size="standard"', HTML)
+        self.assertIn('data-panel-size="mini"', HTML)
+        self.assertIn('data-panel-size="wide"', HTML)
+        self.assertIn("setPanelView", HTML)
+        self.assertIn("grid-column: span 4 !important", HTML)
+        self.assertIn("grid-column: span 12 !important", HTML)
         self.assertIn("signal-collapse-device", HTML)
-        self.assertIn("cyclePanelView", HTML)
-        self.assertIn("Collapse panel", HTML)
-        self.assertIn("Expand panel", HTML)
 
     def test_ui_has_persistent_device_view_switches(self):
         self.assertIn('id="deviceViewButtons"', HTML)
