@@ -5,7 +5,7 @@ import re
 import struct
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 import serial
@@ -163,6 +163,68 @@ def list_muse_serial_ports() -> list[dict]:
     )
 
 
+def list_muse_bluetooth_devices() -> list[dict]:
+    """List paired classic-Bluetooth devices that macOS exposes via IOBluetooth.
+
+    MU-01 can be usable through RFCOMM even when macOS does not create a
+    /dev/cu.Muse-* serial endpoint. Returning every paired classic device is
+    deliberate: some older Muse units have appeared under generic names such
+    as "Watch", so the UI should let the user explicitly choose that device
+    rather than filtering it out because the name is unexpected.
+    """
+    if not HAVE_NATIVE_MAC_BLUETOOTH:
+        return []
+
+    found: list[dict] = []
+    try:
+        paired = IOBluetooth.IOBluetoothDevice.pairedDevices() or []
+    except Exception:
+        return []
+
+    for device in paired:
+        try:
+            name = str(device.name() or "")
+        except Exception:
+            name = ""
+        try:
+            address = str(device.addressString() or "")
+        except Exception:
+            address = ""
+        try:
+            connected = bool(device.isConnected())
+        except Exception:
+            connected = False
+
+        text = f"{name} {address}".lower()
+        likely = "muse" in text
+        token = f"bt://{address or name}"
+        found.append(
+            {
+                "device": token,
+                "description": (
+                    "paired classic Bluetooth"
+                    + (f" · {name}" if name else "")
+                    + (f" · {address}" if address else "")
+                    + (" · connected" if connected else "")
+                ),
+                "hwid": address,
+                "likely_muse": likely,
+                "bluetooth_name": name,
+                "bluetooth_address": address,
+                "connected": connected,
+            }
+        )
+
+    return sorted(
+        found,
+        key=lambda item: (
+            0 if item["likely_muse"] else 1,
+            0 if item["connected"] else 1,
+            str(item.get("bluetooth_name") or item["device"]).lower(),
+        ),
+    )
+
+
 @dataclass
 class MuseStatus:
     version: str = ""
@@ -173,6 +235,7 @@ class MuseStatus:
     rfcomm_services: str = ""
     rfcomm_channel: int | None = None
     passive_probe: str = ""
+    trace: list[str] = field(default_factory=list)
 
 
 if HAVE_NATIVE_MAC_BLUETOOTH:
@@ -243,7 +306,12 @@ class NativeMacRFCOMM:
         wanted = muse_name.lower()
         for device in paired:
             name = str(device.name() or "")
-            if name.lower() == wanted:
+            try:
+                address = str(device.addressString() or "")
+            except Exception:
+                address = ""
+
+            if wanted in {name.lower(), address.lower()}:
                 exact.append(device)
             elif wanted in name.lower() or (
                 wanted.startswith("muse-") and name.lower().startswith("muse-")
@@ -252,10 +320,17 @@ class NativeMacRFCOMM:
 
         candidates = exact or loose
         if not candidates:
-            names = [str(device.name() or "") for device in paired]
+            labels = []
+            for device in paired:
+                try:
+                    labels.append(
+                        f"{str(device.name() or '')} ({str(device.addressString() or '')})"
+                    )
+                except Exception:
+                    labels.append(str(device.name() or ""))
             raise RuntimeError(
-                f"No paired classic-Bluetooth Muse matching {muse_name!r}. "
-                f"Paired devices visible to IOBluetooth: {names}"
+                f"No paired classic-Bluetooth device matching {muse_name!r}. "
+                f"Paired devices visible to IOBluetooth: {labels}"
             )
         return candidates[0]
 
@@ -486,9 +561,21 @@ class Muse2014SerialClient:
         self.command_terminator = b"\r"
         self.passive_stream_active = False
         self.attempt_deadline = 0.0
+        self.attempt_started_monotonic = 0.0
+
+    def _trace(self, message: str) -> None:
+        elapsed = (
+            max(0.0, time.monotonic() - self.attempt_started_monotonic)
+            if self.attempt_started_monotonic
+            else 0.0
+        )
+        self.status.trace.append(f"{elapsed:5.1f}s · {message}")
+        if len(self.status.trace) > 80:
+            del self.status.trace[:-80]
 
     def _notify_status(self, stage: str) -> None:
         self.status.stage = stage
+        self._trace(stage)
         if self.on_status:
             self.on_status(self.status)
 
@@ -512,6 +599,7 @@ class Muse2014SerialClient:
     def _write_command(self, command: str) -> None:
         if self.serial is None:
             raise RuntimeError("Muse connection is not open")
+        self._trace(f"→ {command}")
         self.serial.write(command.encode("ascii") + self.command_terminator)
         self.serial.flush()
 
@@ -532,7 +620,11 @@ class Muse2014SerialClient:
                 chunks.append(self.serial.read(waiting))
             else:
                 self._sleep_with_deadline(0.03)
-        return b"".join(chunks).decode("utf-8", errors="ignore").strip()
+        text = b"".join(chunks).decode("utf-8", errors="ignore").strip()
+        if text:
+            preview = text.replace("\r", " ").replace("\n", " ")[:180]
+            self._trace(f"← {preview}")
+        return text
 
     def _dispatch_packet(self, kind: str, packet: bytes) -> None:
         if kind == "eeg":
@@ -599,6 +691,8 @@ class Muse2014SerialClient:
 
     @staticmethod
     def _muse_name_from_port(port: str) -> str:
+        if port.startswith("bt://"):
+            return port[5:]
         name = port.rsplit("/", 1)[-1]
         for prefix in ("cu.", "tty."):
             if name.startswith(prefix):
@@ -614,6 +708,8 @@ class Muse2014SerialClient:
         Muse endpoint, so prefer tty endpoints but probe both tty and cu names.
         """
         candidates: list[str] = []
+        if port.startswith("bt://"):
+            return candidates
 
         base = port.rsplit("/", 1)[-1]
         if base.startswith("cu."):
@@ -684,7 +780,7 @@ class Muse2014SerialClient:
             if not glob.glob(candidate):
                 continue
 
-            for terminator, label in ((b"\r", "CR"), (b"\r\n", "CRLF")):
+            for terminator, label in ((b"\r\n", "CRLF"), (b"\r", "CR")):
                 self._check_attempt_deadline()
                 tried.append(f"{candidate} ({label})")
                 self.status.transport = f"macOS Bluetooth serial: {candidate}"
@@ -706,8 +802,10 @@ class Muse2014SerialClient:
                     )
                     if version:
                         return version
-                except Exception:
-                    pass
+                except Exception as exc:
+                    self._trace(
+                        f"Legacy serial attempt failed on {candidate} ({label}): {exc}"
+                    )
 
                 if self.serial is not None:
                     try:
@@ -740,31 +838,39 @@ class Muse2014SerialClient:
             self._check_attempt_deadline()
             channel_id = int(item["channel"])
             service_name = str(item["name"])
-            tried.append(f"{channel_id} ({service_name})")
             self.status.rfcomm_channel = channel_id
-            self._notify_status(
-                f"Trying RFCOMM channel {channel_id}: {service_name}"
-            )
 
-            try:
-                self.serial = NativeMacRFCOMM(
-                    muse_name,
-                    timeout=0.25,
-                    channel_id=channel_id,
+            for terminator, label in ((b"\r\n", "CRLF"), (b"\r", "CR")):
+                self._check_attempt_deadline()
+                tried.append(f"{channel_id} ({service_name}, {label})")
+                self._notify_status(
+                    f"Trying RFCOMM channel {channel_id}: {service_name} ({label})"
                 )
-                version = self._version_handshake(attempts=2)
-                if version:
-                    return version
-            except Exception:
-                pass
 
-            if self.serial is not None:
                 try:
-                    self.serial.close()
-                except Exception:
-                    pass
-                self.serial = None
-            self._sleep_with_deadline(0.4)
+                    self.serial = NativeMacRFCOMM(
+                        muse_name,
+                        timeout=0.25,
+                        channel_id=channel_id,
+                    )
+                    version = self._version_handshake(
+                        attempts=2,
+                        terminator=terminator,
+                    )
+                    if version:
+                        return version
+                except Exception as exc:
+                    self._trace(
+                        f"RFCOMM channel {channel_id} ({label}) failed: {exc}"
+                    )
+
+                if self.serial is not None:
+                    try:
+                        self.serial.close()
+                    except Exception:
+                        pass
+                    self.serial = None
+                self._sleep_with_deadline(0.4)
 
         self.status.rfcomm_channel = None
         self._notify_status("No advertised RFCOMM channel answered as Muse")
@@ -774,6 +880,8 @@ class Muse2014SerialClient:
         )
 
     def open_and_configure(self) -> MuseStatus:
+        self.attempt_started_monotonic = time.monotonic()
+        self.status.trace.clear()
         self.attempt_deadline = time.monotonic() + MUSE_CONNECTION_ATTEMPT_LIMIT
         self._notify_status(
             f"Starting connection pass (max {int(MUSE_CONNECTION_ATTEMPT_LIMIT)} seconds)"
@@ -781,11 +889,15 @@ class Muse2014SerialClient:
 
         if sys.platform == "darwin":
             serial_error = ""
-            try:
-                version = self._open_mac_serial_with_handshake()
-            except Exception as exc:
-                serial_error = str(exc)
-                version = ""
+            version = ""
+            if not self.port.startswith("bt://"):
+                try:
+                    version = self._open_mac_serial_with_handshake()
+                except Exception as exc:
+                    serial_error = str(exc)
+                    self._trace(f"Legacy serial path failed: {serial_error}")
+            else:
+                self._trace("Direct paired-Bluetooth target selected; skipping virtual serial probe")
 
             if not version and HAVE_NATIVE_MAC_BLUETOOTH:
                 self._notify_status(
@@ -794,8 +906,9 @@ class Muse2014SerialClient:
                 try:
                     version = self._open_native_mac_with_handshake()
                 except Exception as exc:
+                    prefix = (serial_error + " | ") if serial_error else ""
                     raise RuntimeError(
-                        serial_error + " | Native RFCOMM fallback: " + str(exc)
+                        prefix + "Native RFCOMM fallback: " + str(exc)
                     ) from exc
         else:
             self._open_virtual_serial_transport()
