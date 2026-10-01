@@ -237,6 +237,15 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("signal.connected && signal.running && signalViewEnabled(signal)", HTML)
         self.assertIn("No live device data", HTML)
 
+    def test_muse_setup_can_use_paired_bluetooth_and_copy_trace(self):
+        self.assertIn("Scan Muse connections", HTML)
+        self.assertIn("Paired Bluetooth devices", HTML)
+        self.assertIn("Use selected connection", HTML)
+        self.assertIn("Copy Muse trace", HTML)
+        self.assertIn("muse-trace", HTML)
+        self.assertIn("data.connections || data.ports || []", HTML)
+        self.assertIn("paired classic-Bluetooth", HTML)
+
     def test_camera_signals_and_lab_exist(self):
         self.assertIn("camera.ppg_raw", SIGNAL_DEFINITIONS)
         self.assertIn("camera.motion_raw", SIGNAL_DEFINITIONS)

@@ -253,4 +253,6 @@ This is intentionally transparent and experimental. The quality percentage is a 
 
 ### Muse macOS transport
 
-On macOS, Biofeedback Play uses Apple's native IOBluetooth framework for the MU-01 live RFCOMM session. The `/dev/cu.Muse-*` port remains useful for identifying the paired headband in Device setup, but data acquisition does not depend on that virtual serial node staying connected.
+On macOS, Biofeedback Play can use either a legacy `/dev/cu.Muse-*` / `/dev/tty.Muse-*` serial endpoint or Apple's native IOBluetooth RFCOMM API. Device setup scans both serial endpoints and paired classic-Bluetooth devices, so a paired MU-01 remains selectable even when macOS does not create a useful serial node or exposes it under an unexpected name.
+
+Muse connection attempts keep a visible trace of transport stages, RFCOMM channels, command framing, short text responses, and failures. The trace can be copied from Device setup. Biofeedback Play tries the CRLF command framing used by the current open-source Muse 2014 LSL implementation first, then CR as a fallback, and probes an opened channel for already-streaming Muse packets before sending configuration commands.
