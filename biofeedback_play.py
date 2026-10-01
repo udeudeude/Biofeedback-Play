@@ -4841,25 +4841,42 @@ function renderDeviceSetup(devices) {
     const select = document.getElementById("musePortSelect");
     post("muse_set_port", {port: select ? select.value : ""}).then(refreshAll);
   };
+
+  const museCopyTrace = document.getElementById("museCopyTrace");
+  if (museCopyTrace) museCopyTrace.onclick = function() {
+    const trace = document.getElementById("museTrace");
+    const text = trace ? trace.textContent : "";
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(function() {
+      museCopyTrace.textContent = "Copied";
+      setTimeout(function() {
+        const current = document.getElementById("museCopyTrace");
+        if (current) current.textContent = "Copy Muse trace";
+      }, 1200);
+    }).catch(function(err) {
+      document.getElementById("error").textContent = String(err);
+    });
+  };
 }
 
 
 function refreshMusePorts() {
-  musePortScanStatus = "Scanning macOS serial ports...";
+  musePortScanStatus = "Scanning serial endpoints and paired classic-Bluetooth devices...";
   renderDeviceSetup(catalog.devices);
 
   return fetch("/api/muse_ports")
     .then(function(r) {
-      if (!r.ok) throw new Error("Serial-port scan failed: HTTP " + r.status);
+      if (!r.ok) throw new Error("Muse connection scan failed: HTTP " + r.status);
       return r.json();
     })
     .then(function(data) {
-      musePorts = data.ports || [];
-      const likely = musePorts.filter(function(port) { return port.likely_muse; });
+      musePorts = data.connections || data.ports || [];
+      const likely = musePorts.filter(function(item) { return item.likely_muse; });
+      const bluetooth = musePorts.filter(function(item) { return item.kind === "bluetooth"; });
+      const serial = musePorts.filter(function(item) { return item.kind !== "bluetooth"; });
 
       if (!data.current && likely.length === 1) {
-        musePortScanStatus =
-          "Found " + musePorts.length + " serial port(s). One looks like a Muse, so Biofeedback Play selected it automatically.";
+        musePortScanStatus = "Found one likely Muse connection and selected it automatically.";
         return post("muse_set_port", {port: likely[0].device})
           .then(function() {
             return refreshAll().then(function() {
@@ -4870,21 +4887,21 @@ function refreshMusePorts() {
 
       if (!musePorts.length) {
         musePortScanStatus =
-          "Scan complete: no macOS serial ports were found. If the Muse is paired, this likely means macOS did not create an RFCOMM serial port for it.";
+          "Scan complete: no serial endpoints or paired classic-Bluetooth devices were found.";
       } else if (likely.length) {
         musePortScanStatus =
-          "Scan complete: found " + musePorts.length + " serial port(s), including " +
-          likely.length + " likely Muse port(s).";
+          "Scan complete: " + bluetooth.length + " paired Bluetooth device(s), " +
+          serial.length + " serial endpoint(s), " + likely.length + " likely Muse match(es).";
       } else {
         musePortScanStatus =
-          "Scan complete: found " + musePorts.length +
-          " serial port(s), but none are named like a Muse. You can still select one manually if you recognize it.";
+          "Scan complete: " + bluetooth.length + " paired Bluetooth device(s) and " +
+          serial.length + " serial endpoint(s). None are named Muse, so select the device you recognize manually.";
       }
 
       renderDeviceSetup(catalog.devices);
     })
     .catch(function(err) {
-      musePortScanStatus = "Serial-port scan failed: " + String(err);
+      musePortScanStatus = "Muse connection scan failed: " + String(err);
       renderDeviceSetup(catalog.devices);
       document.getElementById("error").textContent = String(err);
     });
@@ -5371,9 +5388,23 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/muse_ports":
-            ports = list_muse_serial_ports()
+            ports = [
+                {**item, "kind": "serial"}
+                for item in list_muse_serial_ports()
+            ]
+            bluetooth = [
+                {**item, "kind": "bluetooth"}
+                for item in list_muse_bluetooth_devices()
+            ]
             current = STATE.status().get("muse_port") or ""
-            self.send_json({"ports": ports, "current": current})
+            self.send_json(
+                {
+                    "connections": bluetooth + ports,
+                    "ports": ports,
+                    "bluetooth": bluetooth,
+                    "current": current,
+                }
+            )
             return
 
         if parsed.path == "/api/samples":
