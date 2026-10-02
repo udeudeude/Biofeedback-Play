@@ -1,7 +1,9 @@
+import inspect
 import struct
 import unittest
 
 from devices.muse2014 import (
+    MUSE_CONNECTION_ATTEMPT_LIMIT,
     Muse2014SerialClient,
     MusePacketParser,
     decode_accelerometer_packet,
@@ -69,6 +71,14 @@ class Muse2014Tests(unittest.TestCase):
         )
         self.assertEqual(candidates[0], "/dev/tty.Muse-A620")
         self.assertIn("/dev/cu.Muse-A620", candidates)
+
+    def test_macos_prefers_native_rfcomm_before_legacy_serial(self):
+        source = inspect.getsource(Muse2014SerialClient.open_and_configure)
+        self.assertLess(
+            source.index("_open_native_mac_with_handshake"),
+            source.index("_open_mac_serial_with_handshake"),
+        )
+        self.assertGreaterEqual(MUSE_CONNECTION_ATTEMPT_LIMIT, 55.0)
 
     def test_battery_packet(self):
         packet = bytes([0xB0]) + struct.pack(">HHHH", 8750, 3900, 3880, 27)
