@@ -15,7 +15,7 @@ from serial.tools import list_ports
 MUSE_EEG_RATE = 500.0
 MUSE_ACCEL_RATE = 50.0
 DEFAULT_AFE_GAIN = 1961.0
-MUSE_CONNECTION_ATTEMPT_LIMIT = 40.0
+MUSE_CONNECTION_ATTEMPT_LIMIT = 55.0
 CHANNEL_NAMES = ("TP9", "FP1", "FP2", "TP10")
 
 try:
@@ -854,10 +854,10 @@ class Muse2014SerialClient:
                         timeout=0.25,
                         channel_id=channel_id,
                     )
-                    if self._probe_passive_stream(seconds=2.0):
+                    if self._probe_passive_stream(seconds=1.0):
                         return self.status.version
                     version = self._version_handshake(
-                        attempts=2,
+                        attempts=1,
                         terminator=terminator,
                     )
                     if version:
@@ -891,28 +891,41 @@ class Muse2014SerialClient:
         )
 
         if sys.platform == "darwin":
-            serial_error = ""
             version = ""
-            if not self.port.startswith("bt://"):
+            native_error = ""
+            serial_error = ""
+
+            # Modern macOS can expose a Muse-looking tty that opens successfully
+            # but never carries RFCOMM data. Try the actual paired Bluetooth
+            # device first so a dead virtual serial node cannot consume the
+            # entire diagnostic pass before native RFCOMM gets a chance.
+            if HAVE_NATIVE_MAC_BLUETOOTH:
+                self._notify_status("Trying native macOS RFCOMM first")
+                try:
+                    version = self._open_native_mac_with_handshake()
+                except Exception as exc:
+                    native_error = str(exc)
+                    self._trace(f"Native RFCOMM path failed: {native_error}")
+
+            if not version and not self.port.startswith("bt://"):
+                self._notify_status(
+                    "Native RFCOMM did not answer; trying legacy serial endpoints"
+                )
                 try:
                     version = self._open_mac_serial_with_handshake()
                 except Exception as exc:
                     serial_error = str(exc)
                     self._trace(f"Legacy serial path failed: {serial_error}")
-            else:
-                self._trace("Direct paired-Bluetooth target selected; skipping virtual serial probe")
 
-            if not version and HAVE_NATIVE_MAC_BLUETOOTH:
-                self._notify_status(
-                    "Legacy Mac serial path did not answer; trying raw RFCOMM"
-                )
-                try:
-                    version = self._open_native_mac_with_handshake()
-                except Exception as exc:
-                    prefix = (serial_error + " | ") if serial_error else ""
-                    raise RuntimeError(
-                        prefix + "Native RFCOMM fallback: " + str(exc)
-                    ) from exc
+            if not version:
+                parts = []
+                if native_error:
+                    parts.append("Native RFCOMM: " + native_error)
+                if serial_error:
+                    parts.append("Legacy serial: " + serial_error)
+                if self.port.startswith("bt://") and not HAVE_NATIVE_MAC_BLUETOOTH:
+                    parts.append("Native macOS Bluetooth support is unavailable")
+                raise RuntimeError(" | ".join(parts) or "No Muse transport answered")
         else:
             self._open_virtual_serial_transport()
             version = self._version_handshake(attempts=3, terminator=b"\r\n")
