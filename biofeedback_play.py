@@ -5010,10 +5010,13 @@ function refreshMusePorts() {
       const likely = musePorts.filter(function(item) { return item.likely_muse; });
       const bluetooth = musePorts.filter(function(item) { return item.kind === "bluetooth"; });
       const serial = musePorts.filter(function(item) { return item.kind !== "bluetooth"; });
+      const directMuse = bluetooth.filter(function(item) { return item.likely_muse; });
+      const currentIsLegacyMuseSerial = /^\/dev\/(?:cu|tty)\.Muse/i.test(data.current || "");
 
-      if (!data.current && likely.length === 1) {
-        musePortScanStatus = "Found one likely Muse connection and selected it automatically.";
-        return post("muse_set_port", {port: likely[0].device})
+      if (directMuse.length === 1 && (!data.current || currentIsLegacyMuseSerial)) {
+        musePortScanStatus =
+          "Found the paired Muse Bluetooth device and selected it directly instead of its legacy serial endpoint.";
+        return post("muse_set_port", {port: directMuse[0].device})
           .then(function() {
             return refreshAll().then(function() {
               renderDeviceSetup(catalog.devices);
