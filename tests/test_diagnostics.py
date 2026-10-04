@@ -259,6 +259,15 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("subprocess.Popen", source)
         self.assertIn("select.select", source)
 
+    def test_live_graphs_reduce_offscreen_rendering_load(self):
+        self.assertIn("IntersectionObserver", HTML)
+        self.assertIn("visibleSignalPanels", HTML)
+        self.assertIn("signalPanelIsDrawable", HTML)
+        self.assertIn("decimateGraphValues", HTML)
+        self.assertIn("Math.min(1.5, window.devicePixelRatio || 1)", HTML)
+        self.assertIn("setInterval(pollSignals, 200)", HTML)
+        self.assertIn("signalPanelIsDrawable(signal) || state.audioOn", HTML)
+
     def test_camera_signals_and_lab_exist(self):
         self.assertIn("camera.ppg_raw", SIGNAL_DEFINITIONS)
         self.assertIn("camera.motion_raw", SIGNAL_DEFINITIONS)
