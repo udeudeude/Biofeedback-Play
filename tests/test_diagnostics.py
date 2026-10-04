@@ -1,6 +1,8 @@
+import inspect
 import unittest
 
 from biofeedback_play import (
+    BiofeedbackState,
     EmWaveParser,
     EmWaveSampleClock,
     HTML,
@@ -245,6 +247,17 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("muse-trace", HTML)
         self.assertIn("data.connections || data.ports || []", HTML)
         self.assertIn("paired classic-Bluetooth", HTML)
+        self.assertIn("const directMuse = bluetooth.filter", HTML)
+        self.assertIn(
+            "selected it directly instead of its legacy serial endpoint",
+            HTML,
+        )
+
+    def test_macos_muse_uses_main_thread_helper_process(self):
+        source = inspect.getsource(BiofeedbackState._muse_worker_session)
+        self.assertIn("devices.muse2014_worker", source)
+        self.assertIn("subprocess.Popen", source)
+        self.assertIn("select.select", source)
 
     def test_camera_signals_and_lab_exist(self):
         self.assertIn("camera.ppg_raw", SIGNAL_DEFINITIONS)
