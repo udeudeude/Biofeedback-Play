@@ -7,10 +7,12 @@ import json
 import math
 import os
 import re
+import select
 import socket
 import statistics
 import struct
 import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -2374,6 +2376,137 @@ class BiofeedbackState:
                 pass
 
 
+    def _apply_muse_worker_status(self, status: dict) -> None:
+        """Apply a status snapshot received from the standalone Muse helper."""
+        with self.lock:
+            stage = str(status.get("stage") or "")
+            if stage and stage != self.muse_stage:
+                self.muse_stage_started_monotonic = time.monotonic()
+            self.muse_version = str(status.get("version") or "")
+            self.muse_status_text = str(status.get("status_text") or "")
+            if stage:
+                self.muse_stage = stage
+            self.muse_trace = [str(line) for line in status.get("trace") or []][-80:]
+            self.muse_attempt_state = "working"
+            self.muse_last_error = ""
+            self.muse_retry_at_monotonic = 0.0
+            self.muse_transport = str(status.get("transport") or "")
+            self.muse_rfcomm_services = str(status.get("rfcomm_services") or "")
+            self.muse_rfcomm_channel = status.get("rfcomm_channel")
+            self.muse_passive_probe = str(status.get("passive_probe") or "")
+            self.muse_afe_gain = status.get("afe_gain")
+
+    def _muse_worker_session(self, port: str) -> None:
+        """Run macOS IOBluetooth in a helper process main thread.
+
+        The same RN-iAP connection that succeeds in a standalone Terminal
+        process can time out when IOBluetooth is invoked from Biofeedback
+        Play's background acquisition thread. Keeping the Objective-C Bluetooth
+        lifecycle on the helper process main thread matches the known-good path.
+        """
+        command = [
+            sys.executable,
+            "-u",
+            "-m",
+            "devices.muse2014_worker",
+            "--port",
+            port,
+        ]
+        process = subprocess.Popen(
+            command,
+            cwd=str(ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        worker_error = ""
+
+        try:
+            if process.stdout is None:
+                raise RuntimeError("Muse helper did not provide an output pipe")
+
+            while True:
+                with self.lock:
+                    should_stop = (
+                        self.shutdown
+                        or (not self.muse_running)
+                        or (self.muse_port != port)
+                    )
+
+                if should_stop:
+                    if process.poll() is None:
+                        process.terminate()
+                    return
+
+                if process.poll() is not None:
+                    # Drain any final line(s) before deciding why it exited.
+                    remaining = process.stdout.read()
+                    for raw_line in remaining.splitlines():
+                        line = raw_line.strip()
+                        if not line:
+                            continue
+                        try:
+                            message = json.loads(line)
+                        except json.JSONDecodeError:
+                            worker_error = line
+                            continue
+                        if message.get("type") == "error":
+                            worker_error = str(message.get("message") or "")
+
+                    if worker_error:
+                        raise RuntimeError(worker_error)
+                    if process.returncode not in (0, None):
+                        raise RuntimeError(
+                            f"Muse helper exited with status {process.returncode}"
+                        )
+                    return
+
+                ready, _, _ = select.select([process.stdout], [], [], 0.25)
+                if not ready:
+                    continue
+
+                raw_line = process.stdout.readline()
+                if not raw_line:
+                    continue
+                line = raw_line.strip()
+                if not line:
+                    continue
+
+                try:
+                    message = json.loads(line)
+                except json.JSONDecodeError:
+                    with self.lock:
+                        self.muse_trace = (
+                            self.muse_trace + [f"helper: {line}"]
+                        )[-80:]
+                    continue
+
+                kind = message.get("type")
+                if kind == "status":
+                    self._apply_muse_worker_status(message.get("status") or {})
+                elif kind == "samples":
+                    for sample in message.get("eeg") or []:
+                        self._store_muse_eeg(sample)
+                    for values in message.get("accelerometer") or []:
+                        self._store_muse_accel(tuple(int(v) for v in values))
+                    for battery in message.get("battery") or []:
+                        self._store_muse_battery(battery)
+                elif kind == "ready":
+                    with self.lock:
+                        self.muse_last_error = ""
+                elif kind == "error":
+                    worker_error = str(message.get("message") or "Muse helper failed")
+                    raise RuntimeError(worker_error)
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=1.0)
+
     def _muse_reader_loop(self) -> None:
         while not self.shutdown:
             with self.lock:
@@ -2402,31 +2535,33 @@ class BiofeedbackState:
                 self.muse_stage = "Starting Muse connection attempt"
                 self.muse_stage_started_monotonic = time.monotonic()
 
-            client = Muse2014SerialClient(
-                port=port,
-                on_eeg=self._store_muse_eeg,
-                on_accelerometer=self._store_muse_accel,
-                on_battery=self._store_muse_battery,
-                on_status=self._store_muse_status,
-            )
-
+            client = None
             try:
-                client.open_and_configure()
-                with self.lock:
-                    if port != self.muse_port:
-                        client.close()
-                        continue
-                    # Opening a persistent macOS Bluetooth serial port is not proof
-                    # that the headband itself is present. "Connected" becomes true
-                    # only when actual Muse packets arrive.
-                    self.muse_connected = False
-                    self.muse_last_error = ""
+                if sys.platform == "darwin":
+                    self._muse_worker_session(port)
+                else:
+                    client = Muse2014SerialClient(
+                        port=port,
+                        on_eeg=self._store_muse_eeg,
+                        on_accelerometer=self._store_muse_accel,
+                        on_battery=self._store_muse_battery,
+                        on_status=self._store_muse_status,
+                    )
+                    client.open_and_configure()
+                    with self.lock:
+                        if port != self.muse_port:
+                            client.close()
+                            continue
+                        # A transport opening is not proof of a live headset.
+                        # Connected becomes true only when Muse packets arrive.
+                        self.muse_connected = False
+                        self.muse_last_error = ""
 
-                client.run(
-                    lambda: self.shutdown
-                    or (not self.muse_running)
-                    or (self.muse_port != port)
-                )
+                    client.run(
+                        lambda: self.shutdown
+                        or (not self.muse_running)
+                        or (self.muse_port != port)
+                    )
             except Exception as exc:
                 with self.lock:
                     self.muse_connected = False
@@ -2440,7 +2575,8 @@ class BiofeedbackState:
                     # tell whether useful work is still happening.
                     self.muse_running = False
             finally:
-                client.close()
+                if client is not None:
+                    client.close()
                 with self.lock:
                     self.muse_connected = False
 
@@ -4874,10 +5010,13 @@ function refreshMusePorts() {
       const likely = musePorts.filter(function(item) { return item.likely_muse; });
       const bluetooth = musePorts.filter(function(item) { return item.kind === "bluetooth"; });
       const serial = musePorts.filter(function(item) { return item.kind !== "bluetooth"; });
+      const directMuse = bluetooth.filter(function(item) { return item.likely_muse; });
+      const currentIsLegacyMuseSerial = /^\/dev\/(?:cu|tty)\.Muse/i.test(data.current || "");
 
-      if (!data.current && likely.length === 1) {
-        musePortScanStatus = "Found one likely Muse connection and selected it automatically.";
-        return post("muse_set_port", {port: likely[0].device})
+      if (directMuse.length === 1 && (!data.current || currentIsLegacyMuseSerial)) {
+        musePortScanStatus =
+          "Found the paired Muse Bluetooth device and selected it directly instead of its legacy serial endpoint.";
+        return post("muse_set_port", {port: directMuse[0].device})
           .then(function() {
             return refreshAll().then(function() {
               renderDeviceSetup(catalog.devices);
