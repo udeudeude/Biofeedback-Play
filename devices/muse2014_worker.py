@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import sys
 import time
 from dataclasses import asdict
@@ -68,6 +69,15 @@ class MuseWorkerEmitter:
 
 
 def run(port: str) -> int:
+    stop_requested = False
+
+    def request_stop(signum, frame):
+        nonlocal stop_requested
+        stop_requested = True
+
+    signal.signal(signal.SIGTERM, request_stop)
+    signal.signal(signal.SIGINT, request_stop)
+
     emitter = MuseWorkerEmitter()
     client = Muse2014SerialClient(
         port=port,
@@ -80,7 +90,7 @@ def run(port: str) -> int:
     try:
         client.open_and_configure()
         emitter.emit({"type": "ready"})
-        client.run(lambda: False)
+        client.run(lambda: stop_requested)
     except KeyboardInterrupt:
         return 0
     except Exception as exc:
