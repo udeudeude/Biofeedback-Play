@@ -10,6 +10,7 @@ from devices.muse2014 import (
     decode_battery_packet,
     decode_eeg_packet,
 )
+from devices.muse2014_worker import MuseWorkerEmitter
 
 
 class Muse2014Tests(unittest.TestCase):
@@ -79,6 +80,18 @@ class Muse2014Tests(unittest.TestCase):
             source.index("_open_mac_serial_with_handshake"),
         )
         self.assertGreaterEqual(MUSE_CONNECTION_ATTEMPT_LIMIT, 55.0)
+
+    def test_worker_batches_muse_samples(self):
+        emitter = MuseWorkerEmitter()
+        emitted = []
+        emitter.emit = emitted.append
+        emitter.eeg = [{"microvolts": [1.0, 2.0, 3.0, 4.0]} for _ in range(20)]
+        emitter.accelerometer = [(1, 2, 3)]
+        emitter.flush_samples()
+        self.assertEqual(len(emitted), 1)
+        self.assertEqual(emitted[0]["type"], "samples")
+        self.assertEqual(len(emitted[0]["eeg"]), 20)
+        self.assertEqual(emitted[0]["accelerometer"], [(1, 2, 3)])
 
     def test_battery_packet(self):
         packet = bytes([0xB0]) + struct.pack(">HHHH", 8750, 3900, 3880, 27)
