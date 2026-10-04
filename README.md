@@ -258,3 +258,7 @@ On macOS, Biofeedback Play can use either a legacy `/dev/cu.Muse-*` / `/dev/tty.
 The native Muse transport runs in a small helper subprocess so Apple's IOBluetooth connection lifecycle executes on that process's main thread. This mirrors the standalone Terminal path that successfully opened the user's MU-01 RN-iAP channel when the same call repeatedly timed out from Biofeedback Play's background acquisition thread.
 
 Muse connection attempts keep a visible trace of transport stages, RFCOMM channels, command framing, short text responses, and failures. The trace can be copied from Device setup. Biofeedback Play tries the CRLF command framing used by the current open-source Muse 2014 LSL implementation first, then CR as a fallback, and probes an opened channel for already-streaming Muse packets before sending configuration commands.
+
+### Live graph performance
+
+High-rate sensors such as the Muse continue to be acquired and recorded at full device rate. The browser display is intentionally cheaper: live panels poll at 5 Hz, offscreen panels are not polled or repainted unless their audio is active, Retina canvas resolution is capped, and dense graph histories are reduced to a spike-preserving display trace before drawing. These changes affect visualization only, not the underlying acquisition or recording rate.
