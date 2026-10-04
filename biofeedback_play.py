@@ -3589,6 +3589,8 @@ let deviceViewSignature = "";
 let panelOrder = loadPanelOrder();
 let panelViewState = loadPanelViewState();
 let draggedSignalId = null;
+let signalPanelObserver = null;
+const visibleSignalPanels = new Set();
 let cameraStream = null;
 let cameraAnimationFrame = null;
 let cameraLastFrameAt = 0;
@@ -3834,6 +3836,49 @@ function visibleSignals(signals) {
   const ordered = defaultSortedSignals(live);
   if (signalFilter === "all") return ordered;
   return ordered.filter(function(signal) { return signalKind(signal) === signalFilter; });
+}
+
+function liveDataTabActive() {
+  const tab = document.getElementById("tab-use");
+  return Boolean(tab && tab.classList.contains("active"));
+}
+
+function signalPanelIsDrawable(signal) {
+  if (document.hidden || !liveDataTabActive()) return false;
+  if (!("IntersectionObserver" in window)) return true;
+  return visibleSignalPanels.has(signal.id);
+}
+
+function observeSignalPanels(signals) {
+  visibleSignalPanels.clear();
+  if (signalPanelObserver) {
+    signalPanelObserver.disconnect();
+    signalPanelObserver = null;
+  }
+
+  if (!("IntersectionObserver" in window)) return;
+
+  signalPanelObserver = new IntersectionObserver(function(entries) {
+    entries.forEach(function(entry) {
+      const signalId = entry.target.dataset.signalId;
+      if (!signalId) return;
+      if (entry.isIntersecting) {
+        visibleSignalPanels.add(signalId);
+        const signal = catalog.signals.find(function(item) { return item.id === signalId; });
+        if (signal) {
+          updateSignalNumbers(signal);
+          requestAnimationFrame(function() { drawSignal(signal); });
+        }
+      } else {
+        visibleSignalPanels.delete(signalId);
+      }
+    });
+  }, {root: null, rootMargin: "180px 0px", threshold: 0});
+
+  signals.forEach(function(signal) {
+    const panel = document.getElementById("panel_" + domId(signal.id));
+    if (panel) signalPanelObserver.observe(panel);
+  });
 }
 
 
@@ -4527,6 +4572,7 @@ function renderSignalPanels(signals) {
           '<div class="device-section-summary">' + escapeHtml(hint) + '</div></div>' +
         '</div>' +
       '</section>';
+    observeSignalPanels([]);
     return;
   }
 
@@ -4619,6 +4665,7 @@ function renderSignalPanels(signals) {
       setPanelView(button.dataset.signalId, button.dataset.panelSize);
     };
   });
+  observeSignalPanels(signals);
 }
 
 function clearDropIndicators() {
@@ -5128,7 +5175,9 @@ function refreshAll() {
 }
 
 function fitCanvas(canvas) {
-  const ratio = window.devicePixelRatio || 1;
+  // Retina canvases are expensive in Safari. A modest cap keeps graphs crisp
+  // while cutting the pixel workload substantially on older Macs.
+  const ratio = Math.min(1.5, window.devicePixelRatio || 1);
   const rect = canvas.getBoundingClientRect();
   const w = Math.max(1, Math.floor(rect.width * ratio));
   const h = Math.max(1, Math.floor(rect.height * ratio));
@@ -5139,7 +5188,40 @@ function fitCanvas(canvas) {
   return {w: w, h: h, ratio: ratio};
 }
 
+function decimateGraphValues(values, maxPoints) {
+  if (values.length <= maxPoints || maxPoints < 4) return values;
+
+  const bucketCount = Math.max(1, Math.floor((maxPoints - 2) / 2));
+  const bucketWidth = (values.length - 2) / bucketCount;
+  const out = [values[0]];
+
+  for (let bucket = 0; bucket < bucketCount; bucket++) {
+    const start = Math.max(1, Math.floor(1 + bucket * bucketWidth));
+    const end = Math.min(
+      values.length - 1,
+      Math.max(start + 1, Math.floor(1 + (bucket + 1) * bucketWidth))
+    );
+    let minIndex = start;
+    let maxIndex = start;
+    for (let i = start + 1; i < end; i++) {
+      if (values[i] < values[minIndex]) minIndex = i;
+      if (values[i] > values[maxIndex]) maxIndex = i;
+    }
+    if (minIndex < maxIndex) {
+      out.push(values[minIndex], values[maxIndex]);
+    } else if (maxIndex < minIndex) {
+      out.push(values[maxIndex], values[minIndex]);
+    } else {
+      out.push(values[minIndex]);
+    }
+  }
+
+  out.push(values[values.length - 1]);
+  return out;
+}
+
 function drawSignal(signal) {
+  if (!signalPanelIsDrawable(signal)) return;
   const state = ensureSignalState(signal);
   const canvas = document.getElementById("canvas_" + domId(signal.id));
   if (!canvas) return;
@@ -5155,8 +5237,13 @@ function drawSignal(signal) {
   }
 
   if (state.values.length < 2) return;
-  let min = Math.min.apply(null, state.values);
-  let max = Math.max.apply(null, state.values);
+  const cssWidth = size.w / size.ratio;
+  const plotValues = decimateGraphValues(
+    state.values,
+    Math.max(120, Math.min(500, Math.floor(cssWidth)))
+  );
+  let min = Math.min.apply(null, plotValues);
+  let max = Math.max.apply(null, plotValues);
   if (max === min) { min -= 1; max += 1; }
   const padding = (max - min) * .08;
   min -= padding; max += padding;
@@ -5172,8 +5259,8 @@ function drawSignal(signal) {
     ctx.setLineDash([]);
   }
   ctx.beginPath();
-  state.values.forEach(function(value, index) {
-    const x = index * size.w / Math.max(1, state.values.length - 1);
+  plotValues.forEach(function(value, index) {
+    const x = index * size.w / Math.max(1, plotValues.length - 1);
     const y = size.h - ((value - min) / (max - min)) * size.h;
     if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   });
@@ -5198,20 +5285,29 @@ function formatSignalValue(signal, value) {
 function updateSignalNumbers(signal) {
   const state = ensureSignalState(signal);
   if (!state.values.length) return;
+
+  // Sonification remains responsive even if its panel is offscreen.
+  updateAudio(signal);
+  if (!signalPanelIsDrawable(signal)) return;
+
   const id = domId(signal.id);
   const recent = state.values.slice(-400);
   const current = recent[recent.length - 1];
   const min = Math.min.apply(null, recent);
   const max = Math.max.apply(null, recent);
-  document.getElementById("current_" + id).textContent = formatSignalValue(signal, current);
-  document.getElementById("min_" + id).textContent = formatSignalValue(signal, min);
-  document.getElementById("max_" + id).textContent = formatSignalValue(signal, max);
-  updateAudio(signal);
+  const currentNode = document.getElementById("current_" + id);
+  const minNode = document.getElementById("min_" + id);
+  const maxNode = document.getElementById("max_" + id);
+  if (currentNode) currentNode.textContent = formatSignalValue(signal, current);
+  if (minNode) minNode.textContent = formatSignalValue(signal, min);
+  if (maxNode) maxNode.textContent = formatSignalValue(signal, max);
 }
 
 function pollSignals() {
   const signals = visibleSignals(catalog.signals).filter(function(signal) {
-    return signal.connected && signal.running;
+    if (!(signal.connected && signal.running)) return false;
+    const state = ensureSignalState(signal);
+    return signalPanelIsDrawable(signal) || state.audioOn;
   });
   if (!signals.length) return;
 
@@ -5236,7 +5332,7 @@ function pollSignals() {
           state.values.push(sample.value);
           state.times.push(sample.t);
         });
-        const maxPoints = signal.nominal_rate ? 1500 : 700;
+        const maxPoints = signal.nominal_rate ? 900 : 500;
         if (state.values.length > maxPoints) {
           state.values.splice(0, state.values.length - maxPoints);
           state.times.splice(0, state.times.length - maxPoints);
@@ -5457,12 +5553,17 @@ document.getElementById("captureFolderBtn").onclick = function() { post("reveal_
 window.addEventListener("resize", function() {
   if (document.getElementById("tab-use").classList.contains("active")) drawAllSignals();
 });
+document.addEventListener("visibilitychange", function() {
+  if (!document.hidden && liveDataTabActive()) {
+    requestAnimationFrame(drawAllSignals);
+  }
+});
 
 refreshAll();
 refreshMusePorts();
 scanDevices();
 setInterval(refreshAll, 1000);
-setInterval(pollSignals, 100);
+setInterval(pollSignals, 200);
 </script>
 </body>
 </html>
