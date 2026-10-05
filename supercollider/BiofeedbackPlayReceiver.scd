@@ -82,6 +82,23 @@ OSCdef(\museMotion, { |msg|
     ~biofeedback[\museMotion] = msg[1].asFloat;
 }, '/biofeedback/muse/motion_intensity');
 
+// All five linear band powers; units are experimental µV².
+[\delta, \theta, \alpha, \beta, \gamma].do { |band|
+    OSCdef(("biofeedbackBand_" ++ band).asSymbol, { |msg|
+        ~biofeedback[("muse_" ++ band).asSymbol] = msg[1].asFloat;
+    }, ("/biofeedback/muse/band/" ++ band).asSymbol);
+};
+
+// Contact spread provides a quality context for creative mappings.
+[\tp9, \fp1, \fp2, \tp10].do { |electrode|
+    OSCdef(("biofeedbackContact_" ++ electrode).asSymbol, { |msg|
+        ~biofeedback[("contact_" ++ electrode).asSymbol] = msg[1].asFloat;
+    }, ("/biofeedback/muse/contact/" ++ electrode ++ "/spread_uv").asSymbol);
+};
+OSCdef(\biofeedbackBattery, { |msg|
+    ~biofeedback[\batteryPercent] = msg[1].asFloat;
+}, '/biofeedback/muse/battery_percent');
+
 "Biofeedback Play OSC receiver ready.".postln;
 )
 
@@ -90,3 +107,10 @@ OSCdef(\museMotion, { |msg|
 
 // Individual listeners can be freed with, for example:
 // OSCdef(\emWave1HeartRate).free;
+
+// After evaluating the receiver, inspect a band:
+// ~biofeedback[\muse_beta];
+// Convert linear band power to dB for a creative mapping:
+// (~biofeedback[\muse_alpha].max(1e-12)).log10 * 10;
+// Receiver runs in sclang (default port 57120), not the synthesis server port 57110.
+// Inspect incoming addresses temporarily: OSCFunc.trace(true); stop: OSCFunc.trace(false);

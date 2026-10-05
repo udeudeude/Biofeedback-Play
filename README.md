@@ -264,3 +264,52 @@ Muse connection attempts keep a visible trace of transport stages, RFCOMM channe
 ### Live graph performance
 
 High-rate sensors such as the Muse continue to be acquired and recorded at full device rate. The browser display is intentionally cheaper: live panels poll at 5 Hz, offscreen panels are not polled or repainted unless their audio is active, Retina canvas resolution is capped, and dense graph histories are reduced to a spike-preserving display trace before drawing. These changes affect visualization only, not the underlying acquisition or recording rate.
+
+### Readable graphs and band audio
+
+Mini cards place the channel title above the graph. Graphs show elapsed time,
+vertical values, and units. Dense traces preserve both extrema and their original
+timestamps. Robust range uses the displayed trace's 5th–95th percentiles and marks
+clipped peaks at the plot edges; turn it off to see the full range. Individual EEG
+band plots default to logarithmic power and can switch to linear power. Display
+scaling does not alter audio input, recording, or OSC values.
+
+The five band cards are folded by default, in Delta → Theta → Alpha → Beta → Gamma
+order. Each band has an independent audio button beside the combined graph, so
+alpha, beta, and all other bands remain audible with their cards folded. Band
+sonification maps recent log power to pitch; it does not play the EEG frequency
+itself. Session controls include master volume, Mute all, and Pause graphs.
+Pausing drawing continues acquisition, recording, OSC, numerical values, and audio.
+
+EEG power and RMS use all four electrodes; frontal alpha asymmetry uses FP1 and
+FP2. The interface names those contributors and flags uncertain contact without
+silently excluding channels or changing calculations. Flatlines are marked unknown.
+Battery charge at or below 10% is highlighted; the age of the last telemetry is
+shown, with readings older than 30 seconds marked stale.
+
+### Export and SuperCollider
+
+Start recording in Live data. Download CSV and Metadata appear after the first
+recording starts, and remain available after it stops. The metadata JSON preserves
+signal IDs, units, descriptions, rates, OSC addresses, and the EEG contributor policy.
+CSV remains the same five-column long format. Recordings now also include Muse
+battery percentage and per-electrode contact spread. Recording filenames are unique
+for rapid successive sessions.
+
+In Device setup → OSC output, download the SuperCollider receiver, evaluate its
+parenthesized block in SuperCollider, then enable OSC to `127.0.0.1:57120` and Apply.
+The receiver handles all five band powers, raw EEG, motion, battery, and contact
+spread. Band powers remain **linear µV²** on OSC and in CSV; the sample includes a
+dB conversion. OSC is UDP: enabling a destination does not confirm a receiver is
+listening. Raw EEG remains full rate and contact metadata is experimental.
+
+- Schema: `GET /api/signal_schema`
+- CSV: `GET /api/recording_download`
+- Metadata: `GET /api/recording_download?format=json`
+- Receiver: `GET /api/supercollider_receiver`
+- Contact: `/biofeedback/muse/contact/{tp9,fp1,fp2,tp10}/spread_uv`
+- Battery: `/biofeedback/muse/battery_percent`
+
+Verification: `python -m unittest discover -s tests -q` and `node tests/test_ui.js`.
+The JavaScript checks exercise graph and audio logic with a simulated browser API;
+Safari layout, speaker output, and physical devices require a Mac check.

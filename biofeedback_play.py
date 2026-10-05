@@ -663,6 +663,19 @@ for _emwave_index in range(1, 5):
     )
 
 
+for _channel in ("tp9", "fp1", "fp2", "tp10"):
+    SIGNAL_DEFINITIONS[f"muse.contact.{_channel}"] = _derived_signal(
+        "muse", f"{_channel.upper()} contact spread", "Recent 5th–95th percentile EEG span",
+        "µV, experimental", "Experimental contact estimate; low spread alone does not prove electrode contact.",
+        f"/biofeedback/muse/contact/{_channel}/spread_uv", "spread_uv", precision=1,
+    )
+SIGNAL_DEFINITIONS["muse.battery_percent"] = _derived_signal(
+    "muse", "Muse battery", "Last reported battery charge", "%",
+    "Battery telemetry from the headband; updates only when received.",
+    "/biofeedback/muse/battery_percent", "percentage", precision=0,
+)
+
+
 class EmWaveSampleClock:
     """Reconstruct emWave sample time without inheriting USB delivery jitter.
 
@@ -1302,6 +1315,7 @@ class BiofeedbackState:
         self.muse_passive_probe = ""
         self.muse_afe_gain = None
         self.muse_battery = None
+        self.muse_battery_received_monotonic = 0.0
         self.muse_contact_quality = {}
         self.muse_last_data_monotonic = 0.0
         self.muse_last_eeg_monotonic = 0.0
@@ -1392,9 +1406,11 @@ class BiofeedbackState:
 
     def set_osc(self, enabled: bool, host: str | None = None, port: int | None = None) -> None:
         with self.lock:
+            if port is not None and not 1 <= int(port) <= 65535:
+                raise ValueError("OSC port must be between 1 and 65535")
             if host:
                 self.osc_host = host
-            if port:
+            if port is not None:
                 self.osc_port = int(port)
             self.osc_enabled = bool(enabled)
 
@@ -1404,7 +1420,7 @@ class BiofeedbackState:
                 return self.recording_path
 
             stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
-            path = RECORDINGS / ("biofeedback_" + stamp + ".csv")
+            path = RECORDINGS / ("biofeedback_" + stamp + "_" + str(time.time_ns() % 1000000000) + ".csv")
             fp = path.open("w", newline="", encoding="utf-8")
             writer = csv.writer(fp)
             writer.writerow(
@@ -1412,6 +1428,14 @@ class BiofeedbackState:
             )
             fp.flush()
 
+            path.with_suffix(".json").write_text(json.dumps({
+                "format_version": 1, "started_unix": time.time(),
+                "columns": ["unix_time", "elapsed_s", "device_id", "signal_id", "value"],
+                "signals": SIGNAL_DEFINITIONS,
+                "muse_eeg_contributors": ["TP9", "FP1", "FP2", "TP10"],
+                "muse": {"version": self.muse_version, "afe_gain": self.muse_afe_gain, "connection": self.muse_port},
+                "note": "EEG features include all four electrodes; contact estimates do not exclude channels. Raw values and OSC band power remain linear; graph scaling is display-only.",
+            }, indent=2), encoding="utf-8")
             self.recording_file = fp
             self.recording_writer = writer
             self.recording_path = str(path)
@@ -1572,6 +1596,7 @@ class BiofeedbackState:
                     "afe_gain": self.muse_afe_gain,
                     "battery": self.muse_battery,
                     "contact_quality": dict(self.muse_contact_quality),
+                    "battery_age_s": (time.monotonic() - self.muse_battery_received_monotonic) if self.muse_battery_received_monotonic else None,
                 },
                 "camera": {
                     "connected": (
@@ -2021,6 +2046,8 @@ class BiofeedbackState:
                 contact = muse_contact_quality(muse_eeg, MUSE_EEG_RATE)
                 with self.lock:
                     self.muse_contact_quality = contact
+                for channel, info in contact.items():
+                    self._store_derived(f"muse.contact.{channel}", info["spread_uv"], elapsed)
                 motion = motion_metrics(muse_accel)
                 self._store_derived(
                     "muse.motion_intensity", motion.get("motion_intensity"), elapsed
@@ -2118,6 +2145,8 @@ class BiofeedbackState:
             self.muse_connected = True
             self.muse_last_data_monotonic = time.monotonic()
             self.muse_battery = battery
+            self.muse_battery_received_monotonic = time.monotonic()
+        self._store_derived("muse.battery_percent", battery.get("percentage"), time.monotonic() - self.started_monotonic)
 
     def _store_muse_status(self, status) -> None:
         with self.lock:
@@ -3452,6 +3481,26 @@ html[data-theme="light"] .muse-trace {
   .metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .signal-info { grid-template-columns: 1fr; }
 }
+
+.signal-panel.view-mini { display: block; min-height: 0; }
+.signal-panel.view-mini .signal-panel-header { padding: 38px 12px 8px; align-items: flex-start; }
+.signal-panel.view-mini .signal-title { overflow-wrap: anywhere; }
+.signal-panel.view-mini .signal-collapse-device { display: none; }
+.signal-panel.view-mini canvas { width: calc(100% - 24px); margin: 0 12px 10px; height: 84px !important; }
+.signal-panel-header { padding-top: 38px; padding-left: 13px; }
+.label, .signal-subsection-title { color: var(--text); }
+button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--good); outline-offset: 3px; }
+.muse-battery.low { color: var(--bad); font-weight: 750; }
+.muse-battery.low .muse-battery-fill { background: var(--bad); }
+.quality-note { margin: 8px 12px; font-size: 12px; color: var(--muted); }
+.quality-note.warning { color: var(--bad); font-weight: 650; }
+.graph-controls { padding: 0 12px 8px; font-size: 11px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.graph-controls select { max-width: 100%; }
+.band-details > summary { padding: 10px 0; cursor: pointer; font-weight: 650; }
+.band-details .signal-section-grid { margin-bottom: 12px; }
+.muse-band-key button { padding: 5px 8px; font-size: 12px; }
+.session-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+@media (max-width: 700px) { .signal-panel.view-standard, .signal-panel.view-mini { grid-column: span 12 !important; } }
 </style>
 </head>
 <body>
@@ -3475,6 +3524,7 @@ html[data-theme="light"] .muse-trace {
     <button class="tab-button" data-tab="setup">Device setup</button>
   </nav>
 
+  <div id="error" role="alert" aria-live="polite"></div>
   <section id="tab-use" class="tab-page active">
     <div class="grid">
       <section class="card session-summary">
@@ -3485,6 +3535,12 @@ html[data-theme="light"] .muse-trace {
         <div class="row">
           <button id="recordBtn">Start recording</button>
           <button id="folderBtn">Show recordings</button>
+          <a id="downloadRecording" hidden href="/api/recording_download">Download CSV</a>
+          <a id="downloadMetadata" hidden href="/api/recording_download?format=json">Metadata</a>
+          <button id="muteAll">Mute all</button>
+          <label>Volume <input id="masterVolume" type="range" min="0" max="100" value="35" aria-label="Audio volume"></label>
+          <span id="sessionOutputs" class="small"></span>
+          <button id="pauseGraphs" aria-pressed="false">Pause graphs</button>
         </div>
       </section>
 
@@ -3508,7 +3564,7 @@ html[data-theme="light"] .muse-trace {
         </div>
         <div class="device-view-controls">
           <div>
-            <div class="label">Device views</div>
+            <div class="label">Show device views</div><div class="small">Switches show or hide panels; connection state appears in each live section.</div>
           </div>
           <div id="deviceViewButtons" class="device-view-buttons"></div>
         </div>
@@ -3582,7 +3638,6 @@ html[data-theme="light"] .muse-trace {
           </div>
         </div>
         <div id="deviceSetupGrid" class="device-grid"></div>
-        <div id="error"></div>
       </section>
 
       <section class="card half">
@@ -3593,8 +3648,10 @@ html[data-theme="light"] .muse-trace {
         <div class="row" style="margin-top:12px">
           <label><input id="oscEnabled" type="checkbox"> Enabled</label>
           <input id="oscHost" class="host" type="text" value="127.0.0.1" aria-label="OSC host">
-          <input id="oscPort" class="port" type="number" value="57120" aria-label="OSC port">
+          <input id="oscPort" class="port" type="number" min="1" max="65535" value="57120" aria-label="OSC port">
           <button id="oscApply">Apply</button>
+          <a href="/api/supercollider_receiver" download="BiofeedbackPlayReceiver.scd">SuperCollider receiver</a>
+          <a href="/api/signal_schema" target="_blank">Signal schema</a>
         </div>
       </section>
 
@@ -3654,6 +3711,12 @@ let diagnosticDevices = [];
 let musePorts = [];
 let musePortScanStatus = "Not scanned yet.";
 let audioContext = null;
+let masterGain = null;
+let bandDetailsOpen = false;
+let pollInFlight = false;
+let graphsPaused = false;
+let oscFormDirty = false;
+let controlError = "";
 let signalFilter = "all";
 let deviceViewState = loadDeviceViewState();
 let deviceViewSignature = "";
@@ -3860,6 +3923,8 @@ function defaultSortedSignals(signals) {
     const kindA = order[signalKind(a)];
     const kindB = order[signalKind(b)];
     if (kindA !== kindB) return kindA - kindB;
+    const bandA = MUSE_BAND_IDS.indexOf(a.id), bandB = MUSE_BAND_IDS.indexOf(b.id);
+    if (bandA >= 0 && bandB >= 0) return bandA - bandB;
     return String(a.name || a.id).localeCompare(String(b.name || b.id));
   });
 }
@@ -3916,7 +3981,7 @@ function visibleSignals(signals) {
   const live = signals.filter(function(signal) {
     return Boolean(signal.connected && signal.running && signalViewEnabled(signal));
   });
-  const ordered = defaultSortedSignals(live);
+  const ordered = sortedSignals(live);
   if (signalFilter === "all") return ordered;
   return ordered.filter(function(signal) { return signalKind(signal) === signalFilter; });
 }
@@ -4359,7 +4424,16 @@ function post(action, extra) {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(body)
-  }).then(r => r.json());
+  }).then(async function(r) {
+    const data = await r.json();
+    if (!r.ok || data.ok === false) throw new Error(data.error || "Request failed");
+    controlError = "";
+    return data;
+  }).catch(function(err) {
+    controlError = String(err);
+    document.getElementById("error").textContent = controlError;
+    throw err;
+  });
 }
 
 function domId(value) {
@@ -4613,7 +4687,11 @@ function renderSignalCard(signal) {
         '</div>' +
         '<div class="signal-meaning">' + escapeHtml(signalMeaning(signal)) + '</div>' +
       '</div>' +
-      '<canvas id="canvas_' + id + '"></canvas>' +
+      '<div id="quality_' + id + '" class="quality-note"></div>' +
+      '<div class="graph-controls"><label>Scale <select data-graph-scale="' + escapeHtml(signal.id) + '">' +
+        '<option value="linear">Linear</option>' + (MUSE_BAND_IDS.includes(signal.id) ? '<option value="log" selected>Log power (dB)</option>' : '') + '</select></label>' +
+        '<label><input type="checkbox" data-graph-robust="' + escapeHtml(signal.id) + '" checked> Robust range</label></div>' +
+      '<canvas role="img" aria-label="' + escapeHtml(signal.name) + ' time history" id="canvas_' + id + '"></canvas>' +
       '<details class="signal-tech">' +
         '<summary>Details & technical information</summary>' +
         '<div class="metrics">' +
@@ -4658,13 +4736,13 @@ function renderMuseLiveSummary(device) {
     return '<span class="muse-contact-sensor ' + level + '" data-muse-contact="' +
       escapeHtml(spec[0]) + '" title="' +
       escapeHtml(spec[2] + spread + " · experimental contact estimate") + '">' +
-      '<span class="muse-contact-dot"></span><span>' + escapeHtml(spec[1]) + '</span></span>';
+      '<span class="muse-contact-dot"></span><span>' + escapeHtml(spec[1] + ' · ' + level) + '</span></span>';
   }).join("");
 
   const legend = MUSE_BANDS.map(function(band) {
     return '<span class="muse-band-key">' +
       '<span class="muse-band-swatch" style="--band-color:' + band.color + '"></span>' +
-      '<span><strong>' + band.label + '</strong> ' + band.range +
+      '<button data-band-audio="' + band.id + '" aria-pressed="false" title="Toggle ' + band.label + ' sonification">🔇 ' + band.label + '</button><span>' + band.range +
       ' · <span id="museBandValue_' + band.key + '">—</span></span></span>';
   }).join("");
 
@@ -4684,7 +4762,8 @@ function renderMuseLiveSummary(device) {
         '<div class="muse-band-overview-title">EEG frequency bands</div>' +
         '<div class="muse-band-overview-note">Combined display in dB relative to 1 µV² · experimental</div>' +
       '</div>' +
-      '<canvas id="museBandCanvas"></canvas>' +
+      '<div id="museQualityNote" class="quality-note"></div>' +
+      '<canvas id="museBandCanvas" role="img" aria-label="Five EEG band powers in dB over time"></canvas>' +
       '<div class="muse-band-legend">' + legend + '</div>' +
     '</div>' +
   '</div>';
@@ -4703,7 +4782,25 @@ function updateMuseLiveSummary(device) {
     batteryText.textContent = percent == null ? "waiting for battery" : percent.toFixed(0) + "%";
   }
 
+  const batteryBox = batteryText && batteryText.closest(".muse-battery");
+  const age = device.battery_age_s;
+  if (batteryBox) batteryBox.classList.toggle("low", percent != null && percent <= 10);
+  if (batteryText && percent != null) batteryText.textContent = percent.toFixed(0) + "%" +
+    (percent <= 10 ? " · charge soon" : "") + (age != null ? " · " + Math.floor(age) + "s ago" : "") +
+    ((!device.connected || age > 30) ? " · stale" : "");
   const contact = device && device.contact_quality ? device.contact_quality : {};
+  function qualify(node, channels) {
+    if (!node) return;
+    const uncertain = channels.filter(function(c) { return !contact[c] || contact[c].level !== "good"; });
+    node.textContent = "Uses " + channels.map(function(c) { return c.toUpperCase(); }).join(" / ") +
+      "; all contributors included. " + (uncertain.length ? "Contact uncertain: " + uncertain.map(function(c) { return c.toUpperCase(); }).join(", ") + "." : "Contact estimate good; scaling experimental.");
+    node.classList.toggle("warning", uncertain.length > 0);
+  }
+  qualify(document.getElementById("museQualityNote"), ["tp9", "fp1", "fp2", "tp10"]);
+  catalog.signals.filter(function(x) { return MUSE_BAND_IDS.includes(x.id) || ["muse.alpha_asymmetry", "muse.eeg_rms"].includes(x.id); }).forEach(function(x) {
+    qualify(document.getElementById("quality_" + domId(x.id)), x.id === "muse.alpha_asymmetry" ? ["fp1", "fp2"] : ["tp9", "fp1", "fp2", "tp10"]);
+  });
+  syncBandAudio();
   document.querySelectorAll("[data-muse-contact]").forEach(function(node) {
     const channel = node.dataset.museContact;
     const info = contact[channel] || {};
@@ -4718,6 +4815,8 @@ function updateMuseLiveSummary(device) {
       ? " · " + Number(info.spread_uv).toFixed(0) + " µV spread"
       : "";
     node.title = label + spread + " · experimental contact estimate";
+    const text = node.querySelector("span:last-child");
+    if (text) text.textContent = channel.toUpperCase() + " · " + level;
   });
 }
 
@@ -4803,7 +4902,11 @@ function renderSignalPanels(signals) {
             '<span class="signal-subsection-title">Derived from this sensor</span>' +
             '<span class="signal-subsection-help">Calculations made from the direct signal above</span>' +
           '</div>' +
-          '<div class="signal-section-grid">' + derived.map(renderSignalCard).join("") + '</div>' +
+          (deviceId === "muse" ?
+            '<details class="band-details" id="bandDetails"' + (bandDetailsOpen ? ' open' : '') + '><summary>Individual EEG band graphs & audio</summary><div class="signal-section-grid">' +
+            derived.filter(function(x) { return MUSE_BAND_IDS.includes(x.id); }).sort(function(a,b) { return MUSE_BAND_IDS.indexOf(a.id)-MUSE_BAND_IDS.indexOf(b.id); }).map(renderSignalCard).join("") + '</div></details><div class="signal-section-grid">' +
+            derived.filter(function(x) { return !MUSE_BAND_IDS.includes(x.id) && !x.id.startsWith("muse.contact.") && x.id !== "muse.battery_percent"; }).map(renderSignalCard).join("") + '</div>' :
+            '<div class="signal-section-grid">' + derived.map(renderSignalCard).join("") + '</div>') +
         '</div>';
     }
 
@@ -4838,6 +4941,23 @@ function renderSignalPanels(signals) {
       setPanelView(button.dataset.signalId, button.dataset.panelSize);
     };
   });
+  const bandDetails = document.getElementById("bandDetails");
+  if (bandDetails) bandDetails.ontoggle = function() { bandDetailsOpen = bandDetails.open; requestAnimationFrame(drawAllSignals); };
+  grid.querySelectorAll("[data-band-audio]").forEach(function(button) {
+    button.onclick = function() { toggleAudio(button.dataset.bandAudio); syncBandAudio(); };
+  });
+  grid.querySelectorAll("[data-graph-scale], [data-graph-robust]").forEach(function(control) {
+    const signal = signals.find(function(x) { return x.id === (control.dataset.graphScale || control.dataset.graphRobust); });
+    const state = ensureSignalState(signal);
+    if (control.dataset.graphScale) control.value = state.graphScale || (MUSE_BAND_IDS.includes(signal.id) ? "log" : "linear");
+    else control.checked = state.graphRobust !== false;
+    control.onchange = function() {
+      if (control.dataset.graphScale) state.graphScale = control.value;
+      else state.graphRobust = control.checked;
+      drawSignal(signal);
+    };
+  });
+  syncBandAudio();
   observeSignalPanels(signals);
   if (signals.some(function(signal) { return MUSE_BAND_IDS.includes(signal.id); })) {
     requestAnimationFrame(drawMuseBandOverview);
@@ -5341,12 +5461,18 @@ function refreshAll() {
     record.textContent = runtimeStatus.recording ? "Stop recording" : "Start recording";
     record.className = runtimeStatus.recording ? "recording" : "";
 
-    document.getElementById("oscEnabled").checked = Boolean(runtimeStatus.osc_enabled);
-    document.getElementById("oscHost").value = runtimeStatus.osc_host || "127.0.0.1";
-    document.getElementById("oscPort").value = runtimeStatus.osc_port || 57120;
+    if (!oscFormDirty) {
+      document.getElementById("oscEnabled").checked = Boolean(runtimeStatus.osc_enabled);
+      document.getElementById("oscHost").value = runtimeStatus.osc_host || "127.0.0.1";
+      document.getElementById("oscPort").value = runtimeStatus.osc_port || 57120;
+    }
+    document.getElementById("downloadRecording").hidden = !runtimeStatus.recording_path;
+    document.getElementById("downloadMetadata").hidden = !runtimeStatus.recording_path;
+    document.getElementById("sessionOutputs").textContent = (runtimeStatus.recording ? "Recording · " : "") +
+      (runtimeStatus.osc_enabled ? "OSC → " + runtimeStatus.osc_host + ":" + runtimeStatus.osc_port : "OSC off");
 
     const errors = catalog.devices.map(function(d) { return d.error; }).filter(Boolean);
-    document.getElementById("error").textContent = errors.join(" · ");
+    document.getElementById("error").textContent = [controlError].concat(errors).filter(Boolean).join(" · ");
   }).catch(function(err) {
     document.getElementById("error").textContent = String(err);
   });
@@ -5398,119 +5524,112 @@ function decimateGraphValues(values, maxPoints) {
   return out;
 }
 
-function drawSignal(signal) {
-  if (!signalPanelIsDrawable(signal)) return;
-  const state = ensureSignalState(signal);
-  const canvas = document.getElementById("canvas_" + domId(signal.id));
-  if (!canvas) return;
-  const size = fitCanvas(canvas);
-  const ctx = canvas.getContext("2d");
+// Preserve timestamps through peak decimation; equal-spacing peak buckets distorts time.
+function graphPoints(values, times, limit) {
+  const points = values.map(function(v, i) { return {v: Number(v), t: Number(times[i])}; })
+    .filter(function(p) { return Number.isFinite(p.v) && Number.isFinite(p.t); });
+  if (points.length <= limit) return points;
+  const out = [points[0]], buckets = Math.max(1, Math.floor((limit - 2) / 2));
+  const step = (points.length - 2) / buckets;
+  for (let b = 0; b < buckets; b++) {
+    const start = 1 + Math.floor(b * step), end = Math.min(points.length - 1, 1 + Math.floor((b + 1) * step));
+    let lo = start, hi = start;
+    for (let i = start; i < end; i++) {
+      if (points[i].v < points[lo].v) lo = i;
+      if (points[i].v > points[hi].v) hi = i;
+    }
+    [lo, hi].sort(function(x, y) { return x-y; }).forEach(function(i, k, ids) {
+      if (k === 0 || i !== ids[0]) out.push(points[i]);
+    });
+  }
+  out.push(points[points.length - 1]);
+  return out;
+}
+
+function graphRange(values, robust) {
+  const ordered = values.slice().sort(function(a,b) { return a-b; });
+  let min = ordered[0], max = ordered[ordered.length-1];
+  if (robust && ordered.length >= 20) {
+    min = ordered[Math.floor((ordered.length-1) * .05)];
+    max = ordered[Math.ceil((ordered.length-1) * .95)];
+  }
+  const pad = Math.max(1e-6, (max-min) * .08, max === min ? Math.max(1, Math.abs(min)*.01) : 0);
+  return {min: min-pad, max: max+pad};
+}
+
+function plotHistory(canvas, series, unit, robust) {
+  const size = fitCanvas(canvas), ctx = canvas.getContext("2d"), r = size.ratio;
   ctx.clearRect(0, 0, size.w, size.h);
-
-  ctx.strokeStyle = "#202635";
-  ctx.lineWidth = size.ratio;
-  for (let i = 1; i < 4; i++) {
-    const y = size.h * i / 4;
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(size.w, y); ctx.stroke();
+  const all = series.flatMap(function(s) { return s.points; });
+  if (all.length < 2) {
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--muted");
+    ctx.font = (11*r) + "px sans-serif"; ctx.fillText("Waiting for history…", 10*r, 22*r); return;
   }
-
-  if (state.values.length < 2) return;
-  const cssWidth = size.w / size.ratio;
-  const plotValues = decimateGraphValues(
-    state.values,
-    Math.max(120, Math.min(500, Math.floor(cssWidth)))
-  );
-  let min = Math.min.apply(null, plotValues);
-  let max = Math.max.apply(null, plotValues);
-  if (max === min) { min -= 1; max += 1; }
-  const padding = (max - min) * .08;
-  min -= padding; max += padding;
-
-  ctx.strokeStyle = deviceColor(signal.device_id);
-  ctx.lineWidth = 1.55 * size.ratio;
-  ctx.lineJoin = "round";
-  if (signalKind(signal) === "calculated") {
-    ctx.setLineDash([5 * size.ratio, 3 * size.ratio]);
-  } else if (signalKind(signal) === "comparison") {
-    ctx.setLineDash([9 * size.ratio, 4 * size.ratio]);
-  } else {
-    ctx.setLineDash([]);
+  const range = graphRange(all.map(function(p) { return p.v; }), robust);
+  const t0 = Math.min.apply(null, all.map(function(p) { return p.t; }));
+  const t1 = Math.max.apply(null, all.map(function(p) { return p.t; }));
+  const left = Math.min(76*r, size.w*.27), right = size.w-8*r, top = 20*r, bottom = size.h-20*r;
+  function y(v) { return bottom-(v-range.min)/(range.max-range.min)*(bottom-top); }
+  function x(t) { return left+(t-t0)/Math.max(.001,t1-t0)*(right-left); }
+  ctx.font = (10*r) + "px sans-serif";
+  const theme = getComputedStyle(document.documentElement);
+  ctx.fillStyle = theme.getPropertyValue("--muted"); ctx.strokeStyle = theme.getPropertyValue("--line");
+  ctx.lineWidth = r;
+  for (let i=0; i<3; i++) {
+    const v = range.min+(range.max-range.min)*i/2, yy=y(v);
+    ctx.beginPath(); ctx.moveTo(left,yy); ctx.lineTo(right,yy); ctx.stroke();
+    ctx.fillText(Math.abs(v)>=1000 ? v.toExponential(1) : Number(v.toPrecision(3)).toString(), 3*r, yy+3*r);
   }
-  ctx.beginPath();
-  plotValues.forEach(function(value, index) {
-    const x = index * size.w / Math.max(1, plotValues.length - 1);
-    const y = size.h - ((value - min) / (max - min)) * size.h;
-    if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  ctx.fillText(unit, 3*r, 11*r);
+  ctx.fillText((t1-t0).toFixed(1) + "s ago", left, size.h-4*r);
+  ctx.fillText("now", Math.max(left,right-24*r),size.h-4*r);
+  let clipped=0;
+  series.forEach(function(s) {
+    ctx.strokeStyle=s.color; ctx.lineWidth=1.5*r; ctx.setLineDash([]); ctx.beginPath();
+    s.points.forEach(function(p,i) {
+      const yy=Math.max(top,Math.min(bottom,y(p.v))), xx=x(p.t);
+      if (i===0) ctx.moveTo(xx,yy); else ctx.lineTo(xx,yy);
+    }); ctx.stroke();
+    ctx.fillStyle=s.color;
+    s.points.forEach(function(p) {
+      if (p.v<range.min || p.v>range.max) {
+        clipped++; const xx=x(p.t), yy=p.v>range.max ? top : bottom;
+        ctx.beginPath(); ctx.arc(xx,yy,2*r,0,Math.PI*2); ctx.fill();
+      }
+    });
   });
-  ctx.stroke();
-  ctx.setLineDash([]);
+  if (clipped) { ctx.fillStyle=theme.getPropertyValue("--muted"); ctx.fillText("• off-scale peaks", left, 11*r); }
 }
 
-function drawAllSignals() {
-  visibleSignals(catalog.signals).forEach(drawSignal);
+function drawSignal(signal) {
+  if (graphsPaused || !signalPanelIsDrawable(signal)) return;
+  const state = ensureSignalState(signal), canvas = document.getElementById("canvas_" + domId(signal.id));
+  if (!canvas || !canvas.getBoundingClientRect().width) return;
+  const log = (state.graphScale || (MUSE_BAND_IDS.includes(signal.id) ? "log" : "linear")) === "log";
+  const values = state.values.map(function(v) { return log ? (v>0 ? 10*Math.log10(v) : NaN) : v; });
+  const band = MUSE_BANDS.find(function(b) { return b.id === signal.id; });
+  plotHistory(canvas, [{points:graphPoints(values,state.times,400),color:band ? band.color : deviceColor(signal.device_id)}],
+    log ? "dB re 1 µV²" : signal.unit.replace(", experimental",""), state.graphRobust !== false);
 }
+
+function drawAllSignals() { visibleSignals(catalog.signals).forEach(drawSignal); }
 
 function drawMuseBandOverview() {
-  const canvas = document.getElementById("museBandCanvas");
-  if (!canvas || document.hidden || !liveDataTabActive()) return;
-
-  const size = fitCanvas(canvas);
-  const ctx = canvas.getContext("2d");
-  ctx.clearRect(0, 0, size.w, size.h);
-
-  ctx.strokeStyle = "#202635";
-  ctx.lineWidth = size.ratio;
-  for (let i = 1; i < 4; i++) {
-    const y = size.h * i / 4;
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(size.w, y);
-    ctx.stroke();
-  }
-
-  const series = [];
+  const canvas=document.getElementById("museBandCanvas");
+  if (graphsPaused || !canvas || document.hidden || !liveDataTabActive()) return;
+  const rect = canvas.getBoundingClientRect();
+  if (rect.bottom < -180 || rect.top > window.innerHeight+180) return;
+  const series=[];
   MUSE_BANDS.forEach(function(band) {
-    const signal = catalog.signals.find(function(item) { return item.id === band.id; });
+    const signal=catalog.signals.find(function(s) { return s.id===band.id; });
     if (!signal) return;
-    const state = ensureSignalState(signal);
-    const raw = state.values.slice(-120);
-    const dbValues = raw
-      .filter(function(value) { return Number.isFinite(Number(value)) && Number(value) > 0; })
-      .map(function(value) { return 10 * Math.log10(Number(value)); });
-    if (!dbValues.length) return;
-    series.push({band: band, values: dbValues});
-    const latest = dbValues[dbValues.length - 1];
-    const node = document.getElementById("museBandValue_" + band.key);
-    if (node) node.textContent = latest.toFixed(1) + " dB";
+    const state=ensureSignalState(signal), raw=state.values.slice(-120), times=state.times.slice(-120);
+    const values=raw.map(function(v) { return v>0 ? 10*Math.log10(v) : NaN; });
+    series.push({points:graphPoints(values,times,240),color:band.color});
+    const node=document.getElementById("museBandValue_"+band.key), latest=values[values.length-1];
+    if (node) node.textContent=Number.isFinite(latest) ? latest.toFixed(1)+" dB" : "—";
   });
-
-  if (!series.length) return;
-
-  const all = [];
-  series.forEach(function(item) {
-    item.values.forEach(function(value) { all.push(value); });
-  });
-  let min = Math.min.apply(null, all);
-  let max = Math.max.apply(null, all);
-  if (max === min) { min -= 1; max += 1; }
-  const padding = Math.max(1, (max - min) * 0.08);
-  min -= padding;
-  max += padding;
-
-  series.forEach(function(item) {
-    const values = item.values;
-    ctx.strokeStyle = item.band.color;
-    ctx.lineWidth = 1.6 * size.ratio;
-    ctx.setLineDash([]);
-    ctx.beginPath();
-    values.forEach(function(value, index) {
-      const x = index * size.w / Math.max(1, values.length - 1);
-      const y = size.h - ((value - min) / (max - min)) * size.h;
-      if (index === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.stroke();
-  });
+  plotHistory(canvas,series,"dB re 1 µV²",false);
 }
 
 function formatSignalValue(signal, value) {
@@ -5545,6 +5664,7 @@ function updateSignalNumbers(signal) {
 }
 
 function pollSignals() {
+  if (pollInFlight) return;
   const signals = visibleSignals(catalog.signals).filter(function(signal) {
     if (!(signal.connected && signal.running)) return false;
     const state = ensureSignalState(signal);
@@ -5569,6 +5689,7 @@ function pollSignals() {
     after[signal.id] = ensureSignalState(signal).seq;
   });
 
+  pollInFlight = true;
   fetch("/api/signal_samples_batch", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
@@ -5598,16 +5719,20 @@ function pollSignals() {
         }
       });
       if (museBandsChanged) requestAnimationFrame(drawMuseBandOverview);
+      syncBandAudio();
     })
     .catch(function(err) {
       document.getElementById("error").textContent = String(err);
-    });
+    }).finally(function() { pollInFlight = false; });
 }
 
 function getAudioContext() {
   if (!audioContext) {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     audioContext = new AudioContextClass();
+    masterGain = audioContext.createGain();
+    masterGain.gain.value = Number(document.getElementById("masterVolume").value) / 100;
+    masterGain.connect(audioContext.destination);
   }
   return audioContext;
 }
@@ -5628,7 +5753,7 @@ function toggleAudio(signalId) {
   oscillator.type = signalId.indexOf("skin") >= 0 ? "sine" : "triangle";
   gain.gain.value = 0.018;
   oscillator.frequency.value = 220;
-  oscillator.connect(gain).connect(ctx.destination);
+  oscillator.connect(gain).connect(masterGain);
   oscillator.start();
 
   state.audioOn = true;
@@ -5649,12 +5774,13 @@ function stopAudio(signalId, refreshPanels) {
     state.audioNode = null;
   }
   if (refreshPanels && signal) updateSignalPanels(catalog.signals);
+  syncBandAudio();
 }
 
 function updateAudio(signal) {
   const state = ensureSignalState(signal);
   if (!state.audioOn || !state.audioNode || !state.values.length || !audioContext) return;
-  const recent = state.values.slice(-250);
+  const recent = state.values.slice(-250).map(function(v) { return MUSE_BAND_IDS.includes(signal.id) ? 10 * Math.log10(Math.max(1e-12, v)) : v; });
   let min = Math.min.apply(null, recent);
   let max = Math.max.apply(null, recent);
   const current = recent[recent.length - 1];
@@ -5670,6 +5796,35 @@ function updateAudio(signal) {
   );
 }
 
+function syncBandAudio() {
+  document.querySelectorAll("[data-band-audio]").forEach(function(button) {
+    const id = button.dataset.bandAudio;
+    const signal = catalog.signals.find(function(x) { return x.id === id; });
+    const on = Boolean(signalState[id] && signalState[id].audioOn);
+    button.disabled = !signal || !signal.connected || !signal.running;
+    button.textContent = (on ? "🔊 " : "🔇 ") + MUSE_BANDS.find(function(b) { return b.id === id; }).label;
+    button.classList.toggle("audio-on", on);
+    button.setAttribute("aria-pressed", String(on));
+  });
+}
+["oscEnabled", "oscHost", "oscPort"].forEach(function(id) {
+  document.getElementById(id).oninput = function() { oscFormDirty = true; };
+});
+document.getElementById("pauseGraphs").onclick = function() {
+  graphsPaused = !graphsPaused;
+  this.textContent = graphsPaused ? "Resume graphs" : "Pause graphs";
+  this.setAttribute("aria-pressed", String(graphsPaused));
+  if (!graphsPaused) { drawAllSignals(); drawMuseBandOverview(); }
+};
+document.getElementById("muteAll").onclick = function() {
+  Object.keys(signalState).forEach(function(id) { stopAudio(id, false); });
+  updateSignalPanels(catalog.signals); syncBandAudio();
+};
+try { document.getElementById("masterVolume").value = localStorage.getItem("biofeedbackPlay.volume.v1") || "35"; } catch (_) {}
+document.getElementById("masterVolume").oninput = function() {
+  try { localStorage.setItem("biofeedbackPlay.volume.v1", this.value); } catch (_) {}
+  if (masterGain) masterGain.gain.setTargetAtTime(Number(this.value) / 100, audioContext.currentTime, .03);
+};
 document.getElementById("recordBtn").onclick = function() {
   post(runtimeStatus.recording ? "record_stop" : "record_start").then(refreshAll);
 };
@@ -5679,7 +5834,7 @@ document.getElementById("oscApply").onclick = function() {
     enabled: document.getElementById("oscEnabled").checked,
     host: document.getElementById("oscHost").value,
     port: Number(document.getElementById("oscPort").value)
-  }).then(refreshAll);
+  }).then(function() { oscFormDirty = false; return refreshAll(); });
 };
 
 function deviceName(d) {
@@ -5860,6 +6015,48 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if parsed.path == "/api/supercollider_receiver":
+            body = (ROOT / "supercollider" / "BiofeedbackPlayReceiver.scd").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Disposition", 'attachment; filename="BiofeedbackPlayReceiver.scd"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if parsed.path == "/api/signal_schema":
+            self.send_json({"format_version": 1, "signals": SIGNAL_DEFINITIONS})
+            return
+
+        if parsed.path == "/api/recording_download":
+            with STATE.lock:
+                if not STATE.recording_path:
+                    self.send_json({"error": "No recording available"}, 404)
+                    return
+                if STATE.recording_file:
+                    STATE.recording_file.flush()
+                path = Path(STATE.recording_path)
+                if urllib.parse.parse_qs(parsed.query).get("format") == ["json"]:
+                    path = path.with_suffix(".json")
+                length = path.stat().st_size
+            self.send_response(200)
+            self.send_header("Content-Type", ("application/json" if path.suffix == ".json" else "text/csv") + "; charset=utf-8")
+            self.send_header("Content-Disposition", f'attachment; filename="{path.name}"')
+            self.send_header("Content-Length", str(length))
+            self.end_headers()
+            # Stream a fixed snapshot without holding acquisition's lock or
+            # loading an entire long recording into RAM.
+            with path.open("rb") as fp:
+                remaining = length
+                while remaining:
+                    chunk = fp.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+            return
+
         if parsed.path == "/api/status":
             self.send_json(STATE.status())
             return
@@ -6003,7 +6200,7 @@ class Handler(BaseHTTPRequestHandler):
                 STATE.set_osc(
                     bool(payload.get("enabled")),
                     str(payload.get("host") or "127.0.0.1"),
-                    int(payload.get("port") or 57120),
+                    int(payload.get("port", 57120)),
                 )
             else:
                 self.send_json({"ok": False, "error": "Unknown action"}, 400)

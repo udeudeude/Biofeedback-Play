@@ -505,7 +505,9 @@ def muse_contact_quality(
         p95 = _percentile(values, 0.95)
         spread = max(0.0, p95 - p05)
 
-        if spread <= 50.0:
+        if spread <= 0.01:
+            level = "unknown"  # A flatline cannot establish good electrode contact.
+        elif spread <= 50.0:
             level = "good"
         elif spread <= 100.0:
             level = "fair"
