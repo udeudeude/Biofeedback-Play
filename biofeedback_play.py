@@ -35,6 +35,7 @@ from physiology import (
     camera_pulse_metrics,
     eeg_metrics,
     motion_metrics,
+    muse_contact_quality,
     pair_metrics,
     pulse_metrics,
     skin_metrics,
@@ -1301,6 +1302,7 @@ class BiofeedbackState:
         self.muse_passive_probe = ""
         self.muse_afe_gain = None
         self.muse_battery = None
+        self.muse_contact_quality = {}
         self.muse_last_data_monotonic = 0.0
         self.muse_last_eeg_monotonic = 0.0
         self.muse_last_accel_monotonic = 0.0
@@ -1569,6 +1571,7 @@ class BiofeedbackState:
                     "passive_probe": self.muse_passive_probe,
                     "afe_gain": self.muse_afe_gain,
                     "battery": self.muse_battery,
+                    "contact_quality": dict(self.muse_contact_quality),
                 },
                 "camera": {
                     "connected": (
@@ -2015,6 +2018,9 @@ class BiofeedbackState:
                 eeg = eeg_metrics(muse_eeg, MUSE_EEG_RATE)
                 for key, signal_id in eeg_map.items():
                     self._store_derived(signal_id, eeg.get(key), elapsed)
+                contact = muse_contact_quality(muse_eeg, MUSE_EEG_RATE)
+                with self.lock:
+                    self.muse_contact_quality = contact
                 motion = motion_metrics(muse_accel)
                 self._store_derived(
                     "muse.motion_intensity", motion.get("motion_intensity"), elapsed
@@ -2579,6 +2585,7 @@ class BiofeedbackState:
                     client.close()
                 with self.lock:
                     self.muse_connected = False
+                    self.muse_contact_quality = {}
 
     def _emwave_manager_loop(self) -> None:
         """Own all emWave HID handles in one thread.
