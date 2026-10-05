@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import urllib.request
 import webbrowser
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1035,8 +1036,23 @@ def hid_device_for_token(token: str) -> dict:
     raise RuntimeError("That HID device is no longer connected. Scan again.")
 
 
+def ensure_hid_available_for_diagnostics(meta: dict) -> None:
+    if STATE is None:
+        return
+    if meta["vendor_id"] == VENDOR_ID and meta["product_id"] == PRODUCT_ID:
+        status = STATE.status()
+        if status["running"] and status["connected"]:
+            raise RuntimeError("Stop Lightstone acquisition in Device setup before testing or capturing it.")
+    if meta["vendor_id"] == EMWAVE_VENDOR_ID and meta["product_id"] == EMWAVE_PRODUCT_ID:
+        active = [d["name"] for d in STATE.device_catalog()
+                  if d["id"].startswith("emwave") and d["running"] and d["connected"]]
+        if active:
+            raise RuntimeError("Stop emWave acquisition in Device setup before testing or capturing: " + ", ".join(active))
+
+
 def test_hid_device(token: str) -> dict:
     meta = hid_device_for_token(token)
+    ensure_hid_available_for_diagnostics(meta)
     device = hid.device()
     try:
         device.open_path(decode_hid_path(token))
@@ -1154,29 +1170,7 @@ def capture_hid_device(token: str, seconds: float = 5.0) -> dict:
     seconds = max(1.0, min(float(seconds), 10.0))
     meta = hid_device_for_token(token)
 
-    if (
-        meta["vendor_id"] == VENDOR_ID
-        and meta["product_id"] == PRODUCT_ID
-        and STATE is not None
-    ):
-        lightstone = STATE.status()
-        if lightstone["running"] and lightstone["connected"]:
-            raise RuntimeError(
-                "The Lightstone is already open for live acquisition. "
-                "Stop acquisition before making a raw diagnostic capture of it."
-            )
-
-    if (
-        meta["vendor_id"] == EMWAVE_VENDOR_ID
-        and meta["product_id"] == EMWAVE_PRODUCT_ID
-        and STATE is not None
-    ):
-        emwave = STATE.status()
-        if emwave["emwave_running"] and emwave["emwave_connected"]:
-            raise RuntimeError(
-                "The emWave is already open for live acquisition. "
-                "Stop emWave acquisition before making a raw diagnostic capture of it."
-            )
+    ensure_hid_available_for_diagnostics(meta)
 
     device = hid.device()
     reports: list[dict] = []
@@ -1222,7 +1216,7 @@ def capture_hid_device(token: str, seconds: float = 5.0) -> dict:
     label = meta.get("known") or meta.get("product") or "hid-device"
     safe_label = re.sub(r"[^A-Za-z0-9._-]+", "_", label).strip("_")[:64] or "hid-device"
     stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
-    path = CAPTURES / f"{stamp}_{safe_label}.json"
+    path = CAPTURES / f"{stamp}_{time.time_ns() % 1000000000}_{safe_label}.json"
     path.write_text(json.dumps(capture, indent=2), encoding="utf-8")
 
     return {
@@ -1248,6 +1242,7 @@ class BiofeedbackState:
 
         self.recording = False
         self.recording_path = ""
+        self.recording_started_monotonic = 0.0
         self.recording_file = None
         self.recording_writer = None
 
@@ -1440,6 +1435,7 @@ class BiofeedbackState:
             self.recording_writer = writer
             self.recording_path = str(path)
             self.recording = True
+            self.recording_started_monotonic = time.monotonic()
             return self.recording_path
 
     def stop_recording(self) -> None:
@@ -1484,6 +1480,8 @@ class BiofeedbackState:
                 "connected": self.connected,
                 "last_error": self.last_error,
                 "latest": latest,
+                "session_id": self.started_unix,
+                "recording_elapsed_s": time.monotonic() - self.recording_started_monotonic if self.recording else 0,
                 "recording": self.recording,
                 "recording_path": self.recording_path,
                 "osc_enabled": self.osc_enabled,
@@ -1682,6 +1680,10 @@ class BiofeedbackState:
                 for req in required
             )
 
+            with self.lock:
+                history = self.derived_samples.get(signal_id, ()) if definition.get("derived") else ()
+                value_age = max(0.0, time.monotonic() - self.started_monotonic - history[-1]["t"]) if history else None
+            value_fresh = (value_age is not None and value_age < (30.0 if signal_id == "muse.battery_percent" else 3.0)) if definition.get("derived") else True
             signals.append(
                 {
                     "id": signal_id,
@@ -1693,6 +1695,8 @@ class BiofeedbackState:
                     "running": running,
                     "device_error": device["error"],
                     "sample_count": sample_count,
+                    "value_fresh": value_fresh,
+                    "value_age_s": value_age,
                     "packet_gaps": device.get("packet_gaps"),
                     "estimated_sample_rate_hz": device.get("estimated_sample_rate_hz"),
                     "clock_resets": device.get("clock_resets"),
@@ -2770,6 +2774,7 @@ class BiofeedbackState:
 
 
 STATE: BiofeedbackState | None = None
+SERVER: ThreadingHTTPServer | None = None
 
 
 HTML = r"""<!doctype html>
@@ -3501,6 +3506,27 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
 .muse-band-key button { padding: 5px 8px; font-size: 12px; }
 .session-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 @media (max-width: 700px) { .signal-panel.view-standard, .signal-panel.view-mini { grid-column: span 12 !important; } }
+
+.device-table-scroll { overflow-x: auto; max-width: 100%; }
+.connection-banner { padding: 12px; border: 1px solid var(--bad); border-radius: 10px; margin: 10px 0; }
+[hidden] { display: none !important; }
+button:disabled { cursor: default; opacity: .5; }
+input[type="search"] { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px; width: 220px; max-width: 100%; }
+.signal-panel.waiting-data .signal-primary-number { font-size: 16px; color: var(--muted); }
+.signal-section-grid, .device-grid { grid-template-columns: repeat(12,minmax(0,1fr)); }
+.card, .device-card, .signal-panel, .signal-title-block { min-width: 0; }
+.device-meta, .signal-info, .status-pill { overflow-wrap: anywhere; }
+#captureProgress { width: 160px; }
+@media (max-width: 500px) {
+  main { padding: 16px 12px 32px; }
+  .card { padding: 12px; }
+  .row { gap: 8px; }
+  .host, .port { max-width: 100%; }
+  .muse-live-summary { margin: 10px; padding: 10px; }
+  .signal-toolbar-row, .device-view-controls { align-items: flex-start; }
+  button { min-height: 36px; }
+  .audio-icon { min-height: 31px; }
+}
 </style>
 </head>
 <body>
@@ -3519,13 +3545,14 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
     </div>
   </div>
 
-  <nav class="tabs" aria-label="Biofeedback Play sections">
-    <button class="tab-button active" data-tab="use">Live data</button>
-    <button class="tab-button" data-tab="setup">Device setup</button>
+  <nav class="tabs" role="tablist" aria-label="Biofeedback Play sections">
+    <button id="tabButtonUse" role="tab" aria-controls="tab-use" aria-selected="true" class="tab-button active" data-tab="use">Live data</button>
+    <button id="tabButtonSetup" role="tab" aria-controls="tab-setup" aria-selected="false" tabindex="-1" class="tab-button" data-tab="setup">Device setup</button>
   </nav>
 
+  <div id="connectionBanner" class="connection-banner" hidden role="status">The local service is unavailable. Relaunch Biofeedback Play.command; this page will reconnect automatically. Audio muted; camera stopped. <button id="retryService">Retry now</button></div>
   <div id="error" role="alert" aria-live="polite"></div>
-  <section id="tab-use" class="tab-page active">
+  <section id="tab-use" role="tabpanel" aria-labelledby="tabButtonUse" class="tab-page active">
     <div class="grid">
       <section class="card session-summary">
         <div>
@@ -3541,6 +3568,7 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
           <label>Volume <input id="masterVolume" type="range" min="0" max="100" value="35" aria-label="Audio volume"></label>
           <span id="sessionOutputs" class="small"></span>
           <button id="pauseGraphs" aria-pressed="false">Pause graphs</button>
+          <button id="openCamera">Open camera</button>
         </div>
       </section>
 
@@ -3550,10 +3578,10 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
         <div class="signal-toolbar-row">
           <div>
             <div class="filter-buttons" aria-label="Signal panel filter">
-              <button class="filter-button active" data-signal-filter="all">Everything</button>
-              <button class="filter-button" data-signal-filter="direct">Direct sensor data</button>
-              <button class="filter-button" data-signal-filter="calculated">Derived</button>
-              <button class="filter-button" data-signal-filter="comparison">Comparisons</button>
+              <button class="filter-button active" data-signal-filter="all" aria-pressed="true">Everything</button>
+              <button class="filter-button" data-signal-filter="direct" aria-pressed="false">Direct sensor data</button>
+              <button class="filter-button" data-signal-filter="calculated" aria-pressed="false">Derived</button>
+              <button class="filter-button" data-signal-filter="comparison" aria-pressed="false">Comparisons</button>
             </div>
           </div>
           <div class="legend" aria-label="Panel legend">
@@ -3567,6 +3595,10 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
             <div class="label">Show device views</div><div class="small">Switches show or hide panels; connection state appears in each live section.</div>
           </div>
           <div id="deviceViewButtons" class="device-view-buttons"></div>
+          <label class="small">Jump to <select id="jumpDevice" aria-label="Jump to device"><option value="">Choose device…</option></select></label>
+          <button id="compactPanels">Compact panels</button>
+          <button id="resetLayout">Reset panel layout</button>
+          <label class="small">Find signal <input id="signalSearch" type="search" placeholder="Alpha, heart rate, emWave…" aria-label="Find live signals"></label>
         </div>
       </section>
 
@@ -3577,7 +3609,7 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
           <div>
             <div class="label">Optional input · Camera</div>
             <h2 style="margin-top:4px">Camera pulse experiment</h2>
-            <div class="small camera-off-hint" style="margin-top:4px">Camera off.</div>
+            <div class="small camera-off-hint" style="margin-top:4px">Camera off. Start it, then keep still with your face inside the forehead and cheek guides. Allow at least 10 seconds for the quality estimate.</div>
           </div>
           <div class="row">
             <span class="status-pill"><span id="cameraDot" class="dot"></span><span id="cameraStatus">Camera off</span></span>
@@ -3626,12 +3658,13 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
     </div>
   </section>
 
-  <section id="tab-setup" class="tab-page">
+  <section id="tab-setup" role="tabpanel" aria-labelledby="tabButtonSetup" class="tab-page">
     <div class="grid">
       <section class="card full">
         <div class="row between">
           <div>
             <div class="label">Configured devices</div>
+            <button id="quitApp">Quit app</button>
             <div class="small" style="margin-top:6px">
               Start, stop, and configure connected devices here.
             </div>
@@ -3680,7 +3713,7 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
           </div>
         </div>
 
-        <div id="deviceList"></div>
+        <div id="deviceList" class="device-table-scroll"></div>
 
         <div class="row" style="margin-top:12px">
           <strong id="selectedDevice">No device selected</strong>
@@ -3689,12 +3722,13 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
             <option value="5" selected>5 second capture</option>
             <option value="10">10 second capture</option>
           </select>
-          <button id="testDeviceBtn">Test open</button>
-          <button id="captureDeviceBtn" class="primary">Capture raw reports</button>
+          <button id="testDeviceBtn" disabled>Test open</button>
+          <button id="captureDeviceBtn" class="primary" disabled>Capture raw reports</button>
+          <progress id="captureProgress" max="100" value="0" hidden aria-label="Diagnostic capture progress"></progress>
           <button id="copyDiagBtn">Copy report</button>
           <button id="captureFolderBtn">Show captures</button>
         </div>
-        <pre id="diagOutput" class="diag-output">Scan, select a device, then test or capture it.</pre>
+        <pre id="diagOutput" class="diag-output" role="status" aria-live="polite">Scan, select a device, then test or capture it.</pre>
       </section>
     </div>
   </section>
@@ -3710,6 +3744,8 @@ let diagnosticText = "";
 let diagnosticDevices = [];
 let musePorts = [];
 let musePortScanStatus = "Not scanned yet.";
+let musePendingPort = null;
+let museScanBusy = false;
 let audioContext = null;
 let masterGain = null;
 let bandDetailsOpen = false;
@@ -3726,6 +3762,13 @@ let draggedSignalId = null;
 let signalPanelObserver = null;
 const visibleSignalPanels = new Set();
 let cameraStream = null;
+let cameraStarting = false;
+let cameraGeneration = 0;
+let cameraPostInFlight = false;
+let refreshInFlight = false;
+let serverSessionId = null;
+let signalSearch = "";
+let diagnosticsBusy = false;
 let cameraAnimationFrame = null;
 let cameraLastFrameAt = 0;
 let cameraPpgFast = null;
@@ -3981,7 +4024,7 @@ function visibleSignals(signals) {
   const live = signals.filter(function(signal) {
     return Boolean(signal.connected && signal.running && signalViewEnabled(signal));
   });
-  const ordered = sortedSignals(live);
+  const ordered = sortedSignals(live).filter(function(s) { return !signalSearch || [s.name, s.device_name, s.data_label, s.id].join(" ").toLowerCase().includes(signalSearch); });
   if (signalFilter === "all") return ordered;
   return ordered.filter(function(signal) { return signalKind(signal) === signalFilter; });
 }
@@ -4180,7 +4223,10 @@ function updateCameraStatus(text, live) {
   if (label) label.textContent = text;
 }
 
-function cameraStopLocal() {
+function cameraStopLocal(notifyServer) {
+  cameraGeneration++;
+  cameraStarting = false;
+  if (notifyServer === undefined) notifyServer = true;
   if (cameraAnimationFrame) {
     cancelAnimationFrame(cameraAnimationFrame);
     cameraAnimationFrame = null;
@@ -4189,6 +4235,8 @@ function cameraStopLocal() {
     cameraStream.getTracks().forEach(function(track) { track.stop(); });
     cameraStream = null;
   }
+  const video = document.getElementById("cameraVideo");
+  if (video) { video.pause(); video.srcObject = null; }
   cameraPreviousFrame = null;
   cameraPpgFast = null;
   cameraPpgSlow = null;
@@ -4202,19 +4250,20 @@ function cameraStopLocal() {
   document.getElementById("cameraToggle").className = "primary";
   document.getElementById("cameraLab").classList.remove("active");
   updateCameraStatus("Camera off", false);
-  post("camera_stop").catch(function() {});
+  if (notifyServer) post("camera_stop").catch(function() {});
 }
 
 function cameraPostPending(force) {
   const now = performance.now();
-  if (!cameraPendingSamples.length) return;
+  if (cameraPostInFlight || !cameraPendingSamples.length) return;
   if (!force && now - cameraLastPostAt < 250) return;
   const batch = cameraPendingSamples.splice(0, cameraPendingSamples.length);
   cameraLastPostAt = now;
+  cameraPostInFlight = true;
   post("camera_samples", {samples: batch}).catch(function(err) {
     updateCameraStatus("Camera data error", false);
     document.getElementById("error").textContent = String(err);
-  });
+  }).finally(function() { cameraPostInFlight = false; });
 }
 
 function cameraAnalyzeFrame(timestamp) {
@@ -4377,14 +4426,18 @@ function cameraAnalyzeFrame(timestamp) {
 }
 
 async function cameraStartLocal() {
+  if (cameraStarting || cameraStream) return;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     updateCameraStatus("Camera API unavailable", false);
     return;
   }
 
   updateCameraStatus("Requesting camera…", false);
+  cameraStarting = true;
+  const generation = ++cameraGeneration;
+  document.getElementById("cameraToggle").textContent = "Cancel camera";
   try {
-    cameraStream = await navigator.mediaDevices.getUserMedia({
+    const stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: "user",
         width: {ideal: 640},
@@ -4393,9 +4446,13 @@ async function cameraStartLocal() {
       },
       audio: false
     });
+    if (generation !== cameraGeneration) { stream.getTracks().forEach(function(track) { track.stop(); }); return; }
+    cameraStream = stream;
+    stream.getVideoTracks().forEach(function(track) { track.addEventListener("ended", function() { if (cameraStream === stream) cameraStopLocal(); }); });
     const video = document.getElementById("cameraVideo");
     video.srcObject = cameraStream;
     await video.play();
+    if (generation !== cameraGeneration) return;
     cameraPreviousFrame = null;
     cameraPpgFast = null;
     cameraPpgSlow = null;
@@ -4412,21 +4469,37 @@ async function cameraStartLocal() {
     updateCameraStatus("Camera live", true);
     cameraAnimationFrame = requestAnimationFrame(cameraAnalyzeFrame);
   } catch (err) {
-    cameraStream = null;
-    updateCameraStatus("Camera permission/device error", false);
-    document.getElementById("error").textContent = "Camera: " + String(err);
+    if (generation !== cameraGeneration) return;
+    cameraStopLocal(false);
+    const hints = {NotAllowedError:"Allow camera access for this page in your browser settings, then retry.",
+      NotFoundError:"No camera found. Connect or enable a camera, then retry.",
+      NotReadableError:"Camera is busy or unavailable. Close other camera apps, then retry."};
+    controlError = "Camera: " + (hints[err.name] || String(err));
+    updateCameraStatus("Camera stopped · retry", false);
+    document.getElementById("error").textContent = controlError;
+  } finally {
+    if (generation === cameraGeneration) cameraStarting = false;
   }
+}
+
+async function fetchJson(url, options) {
+  const controller = new AbortController();
+  const timer = setTimeout(function() { controller.abort(); }, 15000);
+  try {
+    const r = await fetch(url, Object.assign({}, options || {}, {signal:controller.signal}));
+    const data = await r.json();
+    if (!r.ok || data.ok === false) throw new Error(data.error || "Request failed (" + r.status + ")");
+    return data;
+  } finally { clearTimeout(timer); }
 }
 
 function post(action, extra) {
   const body = Object.assign({action: action}, extra || {});
-  return fetch("/api/control", {
+  return fetchJson("/api/control", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(body)
-  }).then(async function(r) {
-    const data = await r.json();
-    if (!r.ok || data.ok === false) throw new Error(data.error || "Request failed");
+  }).then(function(data) {
     controlError = "";
     return data;
   }).catch(function(err) {
@@ -4504,17 +4577,26 @@ function syncCameraViewVisibility() {
 function switchTab(name) {
   document.querySelectorAll(".tab-button").forEach(function(button) {
     button.classList.toggle("active", button.dataset.tab === name);
+    button.setAttribute("aria-selected", String(button.dataset.tab === name));
+    button.tabIndex = button.dataset.tab === name ? 0 : -1;
   });
   document.querySelectorAll(".tab-page").forEach(function(page) {
     page.classList.toggle("active", page.id === "tab-" + name);
   });
   if (name === "use") {
-    requestAnimationFrame(drawAllSignals);
+    requestAnimationFrame(function() { drawAllSignals(); drawMuseBandOverview(); });
   }
 }
 
 document.querySelectorAll(".tab-button").forEach(function(button) {
   button.onclick = function() { switchTab(button.dataset.tab); };
+  button.onkeydown = function(event) {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const tabs = Array.from(document.querySelectorAll(".tab-button"));
+    const next = event.key === "Home" ? tabs[0] : event.key === "End" ? tabs[tabs.length-1] : tabs[(tabs.indexOf(button)+1)%tabs.length];
+    switchTab(next.dataset.tab); next.focus();
+  };
 });
 
 document.getElementById("themeToggle").onclick = function() {
@@ -4527,6 +4609,7 @@ document.querySelectorAll("[data-signal-filter]").forEach(function(button) {
     signalFilter = button.dataset.signalFilter;
     document.querySelectorAll("[data-signal-filter]").forEach(function(candidate) {
       candidate.classList.toggle("active", candidate === button);
+      candidate.setAttribute("aria-pressed", String(candidate === button));
     });
     renderSignalPanels(visibleSignals(catalog.signals));
     updateSignalPanels(visibleSignals(catalog.signals));
@@ -4535,7 +4618,7 @@ document.querySelectorAll("[data-signal-filter]").forEach(function(button) {
 });
 
 document.getElementById("cameraToggle").onclick = function() {
-  if (cameraStream) cameraStopLocal();
+  if (cameraStream || cameraStarting) cameraStopLocal();
   else cameraStartLocal();
 };
 document.getElementById("cameraMagnifyToggle").onclick = function() {
@@ -4829,7 +4912,8 @@ function renderSignalPanels(signals) {
     const anyEnabledConnected = catalog.devices.some(function(device) {
       return device.connected && device.running && deviceViewEnabled(device.id);
     });
-    let hint = "Connect a sensor or start the camera.";
+    let hint = "Connect a USB sensor, pair your Muse in Bluetooth settings, or start the camera below.";
+    if (anyEnabledConnected) hint = "No signals match this filter or search. Show Everything or clear the search.";
     if (anyConnected && !anyEnabledConnected) {
       hint = "A device is connected, but its view is turned off. Use Device views above to show it.";
     }
@@ -4837,9 +4921,15 @@ function renderSignalPanels(signals) {
       '<section class="signal-device-section" style="--device-accent:#68718a">' +
         '<div class="device-section-header">' +
           '<div><div class="device-section-name">No live device data</div>' +
-          '<div class="device-section-summary">' + escapeHtml(hint) + '</div></div>' +
+          '<div class="device-section-summary">' + escapeHtml(hint) + '</div><button id="emptyAction">' + (anyEnabledConnected ? 'Clear filters' : 'Open Device setup') + '</button></div>' +
         '</div>' +
       '</section>';
+    document.getElementById("emptyAction").onclick = function() {
+      if (!anyEnabledConnected) { switchTab("setup"); return; }
+      signalFilter = "all"; signalSearch = ""; document.getElementById("signalSearch").value = "";
+      document.querySelectorAll("[data-signal-filter]").forEach(function(b) { b.classList.toggle("active", b.dataset.signalFilter === "all"); b.setAttribute("aria-pressed", String(b.dataset.signalFilter === "all")); });
+      signalSignature = ""; applyCatalog(catalog);
+    };
     observeSignalPanels([]);
     return;
   }
@@ -4868,7 +4958,7 @@ function renderSignalPanels(signals) {
       (derived.length ? " · " + derived.length + " derived" : "");
 
     let html =
-      '<section class="signal-device-section" style="--device-accent:' + escapeHtml(deviceColor(deviceId)) + '">' +
+      '<section id="section_' + domId(deviceId) + '" class="signal-device-section" style="--device-accent:' + escapeHtml(deviceColor(deviceId)) + '">' +
         '<div class="device-section-header">' +
           '<div>' +
             '<div class="device-section-name">' + escapeHtml(deviceName) + '</div>' +
@@ -5054,6 +5144,9 @@ function updateSignalPanels(signals) {
     if (!panel) return;
 
     const live = Boolean(signal.connected && signal.running);
+    const fresh = signal.value_fresh !== false;
+    panel.classList.toggle("waiting-data", !fresh);
+    if (!fresh) document.getElementById("current_" + id).textContent = "Waiting for valid data";
     panel.classList.toggle("offline", !live);
     const dot = document.getElementById("dot_" + id);
     if (dot) dot.className = live ? "dot on" : "dot";
@@ -5066,9 +5159,9 @@ function updateSignalPanels(signals) {
 
     const audioButton = document.getElementById("audio_" + id);
     if (!audioButton) return;
-    audioButton.disabled = !live;
+    audioButton.disabled = !live || !fresh;
     const state = ensureSignalState(signal);
-    if (!live && state.audioOn) stopAudio(signal.id);
+    if ((!live || !fresh) && state.audioOn) stopAudio(signal.id);
     audioButton.textContent = state.audioOn ? "🔊" : "🔇";
     audioButton.className = state.audioOn ? "audio-icon audio-on" : "audio-icon";
     audioButton.setAttribute("aria-label", state.audioOn ? "Mute audio" : "Turn audio on");
@@ -5123,7 +5216,7 @@ function renderDeviceSetup(devices) {
       deviceSpecific =
         '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">' +
           '<div class="label">Camera control</div>' +
-          '<div class="small" style="margin-top:6px">Start or stop the camera from Live data. Video processing stays local.</div>' +
+          '<div class="small" style="margin-top:6px">Start or stop the camera from Live data. Video processing stays local.</div><button id="setupCamera">Open camera workspace</button>' +
         '</div>';
     }
     if (device.id === "emwave" || /^emwave[2-4]$/.test(device.id)) {
@@ -5137,7 +5230,7 @@ function renderDeviceSetup(devices) {
         '</div>';
     }
     if (device.id === "muse") {
-      const currentPort = device.port || "";
+      const currentPort = musePendingPort != null ? musePendingPort : (device.port || "");
       let options = '<option value="">Select Muse connection</option>';
       const serialConnections = musePorts.filter(function(item) { return item.kind !== "bluetooth"; });
       const bluetoothConnections = musePorts.filter(function(item) { return item.kind === "bluetooth"; });
@@ -5151,6 +5244,9 @@ function renderDeviceSetup(devices) {
           escapeHtml(label) + '</option>';
       }
 
+      if (currentPort && !musePorts.some(function(item) { return item.device === currentPort; })) {
+        options += '<option selected value="' + escapeHtml(currentPort) + '">Saved connection · ' + escapeHtml(currentPort) + '</option>';
+      }
       if (bluetoothConnections.length) {
         options += '<optgroup label="Paired Bluetooth devices">' +
           bluetoothConnections.map(optionHtml).join("") + '</optgroup>';
@@ -5307,8 +5403,12 @@ function renderDeviceSetup(devices) {
     };
   });
 
+  const setupCamera = document.getElementById("setupCamera");
+  if (setupCamera) setupCamera.onclick = openCameraWorkspace;
   const museScan = document.getElementById("museScanPorts");
-  if (museScan) museScan.onclick = refreshMusePorts;
+  if (museScan) { museScan.disabled = museScanBusy; museScan.onclick = refreshMusePorts; }
+  const museSelect = document.getElementById("musePortSelect");
+  if (museSelect) museSelect.onchange = function() { musePendingPort = this.value; };
 
   const museSettings = document.getElementById("museBluetoothSettings");
   if (museSettings) museSettings.onclick = function() {
@@ -5318,7 +5418,7 @@ function renderDeviceSetup(devices) {
   const museSave = document.getElementById("museSavePort");
   if (museSave) museSave.onclick = function() {
     const select = document.getElementById("musePortSelect");
-    post("muse_set_port", {port: select ? select.value : ""}).then(refreshAll);
+    post("muse_set_port", {port: select ? select.value : ""}).then(function() { musePendingPort = null; return refreshAll(); });
   };
 
   const museCopyTrace = document.getElementById("museCopyTrace");
@@ -5340,14 +5440,12 @@ function renderDeviceSetup(devices) {
 
 
 function refreshMusePorts() {
+  if (museScanBusy) return Promise.resolve();
+  museScanBusy = true;
   musePortScanStatus = "Scanning serial endpoints and paired classic-Bluetooth devices...";
   renderDeviceSetup(catalog.devices);
 
-  return fetch("/api/muse_ports")
-    .then(function(r) {
-      if (!r.ok) throw new Error("Muse connection scan failed: HTTP " + r.status);
-      return r.json();
-    })
+  return fetchJson("/api/muse_ports")
     .then(function(data) {
       musePorts = data.connections || data.ports || [];
       const likely = musePorts.filter(function(item) { return item.likely_muse; });
@@ -5356,7 +5454,7 @@ function refreshMusePorts() {
       const directMuse = bluetooth.filter(function(item) { return item.likely_muse; });
       const currentIsLegacyMuseSerial = /^\/dev\/(?:cu|tty)\.Muse/i.test(data.current || "");
 
-      if (directMuse.length === 1 && (!data.current || currentIsLegacyMuseSerial)) {
+      if (musePendingPort == null && directMuse.length === 1 && (!data.current || currentIsLegacyMuseSerial)) {
         musePortScanStatus =
           "Found the paired Muse Bluetooth device and selected it directly instead of its legacy serial endpoint.";
         return post("muse_set_port", {port: directMuse[0].device})
@@ -5386,7 +5484,7 @@ function refreshMusePorts() {
       musePortScanStatus = "Muse connection scan failed: " + String(err);
       renderDeviceSetup(catalog.devices);
       document.getElementById("error").textContent = String(err);
-    });
+    }).finally(function() { museScanBusy = false; renderDeviceSetup(catalog.devices); });
 }
 
 function updateGlobalStatus() {
@@ -5418,6 +5516,7 @@ function stopUnavailableAudio() {
       signal &&
       signal.connected &&
       signal.running &&
+      signal.value_fresh !== false &&
       signalViewEnabled(signal)
     );
 
@@ -5446,16 +5545,30 @@ function applyCatalog(data) {
   if (!document.activeElement || document.activeElement.id !== "musePortSelect") {
     renderDeviceSetup(catalog.devices);
   }
+  const jump = document.getElementById("jumpDevice");
+  const jumpSignature = catalog.devices.filter(function(d) { return d.connected && d.running && deviceViewEnabled(d.id); }).map(function(d) { return d.id; }).join("|");
+  if (jump.dataset.signature !== jumpSignature) {
+    jump.dataset.signature = jumpSignature;
+    jump.innerHTML = '<option value="">Choose device…</option>' + catalog.devices.filter(function(d) { return d.connected && d.running && deviceViewEnabled(d.id); }).map(function(d) { return '<option value="' + escapeHtml(d.id) + '">' + escapeHtml(d.name) + '</option>'; }).join("");
+  }
   updateGlobalStatus();
 }
 
 function refreshAll() {
+  if (refreshInFlight) return Promise.resolve();
+  refreshInFlight = true;
   return Promise.all([
-    fetch("/api/catalog").then(r => r.json()),
-    fetch("/api/status").then(r => r.json())
+    fetchJson("/api/catalog"), fetchJson("/api/status")
   ]).then(function(results) {
-    applyCatalog(results[0]);
+    const nextSession = results[1].session_id;
+    if (serverSessionId != null && nextSession !== serverSessionId) {
+      Object.keys(signalState).forEach(function(id) { stopAudio(id, false); delete signalState[id]; });
+      signalSignature = "";
+    }
+    serverSessionId = nextSession;
     runtimeStatus = results[1];
+    applyCatalog(results[0]);
+    document.getElementById("connectionBanner").hidden = true;
 
     const record = document.getElementById("recordBtn");
     record.textContent = runtimeStatus.recording ? "Stop recording" : "Start recording";
@@ -5468,14 +5581,19 @@ function refreshAll() {
     }
     document.getElementById("downloadRecording").hidden = !runtimeStatus.recording_path;
     document.getElementById("downloadMetadata").hidden = !runtimeStatus.recording_path;
-    document.getElementById("sessionOutputs").textContent = (runtimeStatus.recording ? "Recording · " : "") +
+    document.getElementById("sessionOutputs").textContent = (runtimeStatus.recording ? "Recording " + Math.floor(runtimeStatus.recording_elapsed_s / 60) + ":" + String(Math.floor(runtimeStatus.recording_elapsed_s % 60)).padStart(2,"0") + " · " : "") +
       (runtimeStatus.osc_enabled ? "OSC → " + runtimeStatus.osc_host + ":" + runtimeStatus.osc_port : "OSC off");
 
     const errors = catalog.devices.map(function(d) { return d.error; }).filter(Boolean);
     document.getElementById("error").textContent = [controlError].concat(errors).filter(Boolean).join(" · ");
   }).catch(function(err) {
     document.getElementById("error").textContent = String(err);
-  });
+    document.getElementById("connectionBanner").hidden = false;
+    document.getElementById("globalStatus").textContent = "Service unavailable · retrying";
+    document.getElementById("globalDot").className = "dot";
+    Object.keys(signalState).forEach(function(id) { stopAudio(id, false); });
+    if (cameraStream || cameraStarting) cameraStopLocal(false);
+  }).finally(function() { refreshInFlight = false; });
 }
 
 function fitCanvas(canvas) {
@@ -5627,7 +5745,7 @@ function drawMuseBandOverview() {
     const values=raw.map(function(v) { return v>0 ? 10*Math.log10(v) : NaN; });
     series.push({points:graphPoints(values,times,240),color:band.color});
     const node=document.getElementById("museBandValue_"+band.key), latest=values[values.length-1];
-    if (node) node.textContent=Number.isFinite(latest) ? latest.toFixed(1)+" dB" : "—";
+    if (node) node.textContent=signal.value_fresh !== false && Number.isFinite(latest) ? latest.toFixed(1)+" dB" : "—";
   });
   plotHistory(canvas,series,"dB re 1 µV²",false);
 }
@@ -5658,17 +5776,20 @@ function updateSignalNumbers(signal) {
   const currentNode = document.getElementById("current_" + id);
   const minNode = document.getElementById("min_" + id);
   const maxNode = document.getElementById("max_" + id);
-  if (currentNode) currentNode.textContent = formatSignalValue(signal, current);
+  if (currentNode) currentNode.textContent = signal.value_fresh === false ? "Waiting for valid data" : formatSignalValue(signal, current);
   if (minNode) minNode.textContent = formatSignalValue(signal, min);
   if (maxNode) maxNode.textContent = formatSignalValue(signal, max);
 }
 
 function pollSignals() {
   if (pollInFlight) return;
-  const signals = visibleSignals(catalog.signals).filter(function(signal) {
+  const visibleIds = new Set(visibleSignals(catalog.signals).map(function(s) { return s.id; }));
+  const signals = catalog.signals.filter(function(signal) {
+    if (!signalViewEnabled(signal)) return false;
     if (!(signal.connected && signal.running)) return false;
     const state = ensureSignalState(signal);
-    return signalPanelIsDrawable(signal) || state.audioOn || MUSE_BAND_IDS.includes(signal.id);
+    if (!visibleIds.has(signal.id) && !state.audioOn) return false;
+    return signalPanelIsDrawable(signal) || state.audioOn;
   });
 
   // The combined Muse band card is a device-level summary rather than one of
@@ -5690,12 +5811,11 @@ function pollSignals() {
   });
 
   pollInFlight = true;
-  fetch("/api/signal_samples_batch", {
+  fetchJson("/api/signal_samples_batch", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify({after: after})
   })
-    .then(r => r.json())
     .then(function(data) {
       const samplesBySignal = data.samples || {};
       let museBandsChanged = false;
@@ -5739,7 +5859,7 @@ function getAudioContext() {
 
 function toggleAudio(signalId) {
   const signal = catalog.signals.find(function(s) { return s.id === signalId; });
-  if (!signal || !(signal.connected && signal.running)) return;
+  if (!signal || !(signal.connected && signal.running) || signal.value_fresh === false) return;
   const state = ensureSignalState(signal);
   if (state.audioOn) {
     stopAudio(signalId);
@@ -5780,6 +5900,7 @@ function stopAudio(signalId, refreshPanels) {
 function updateAudio(signal) {
   const state = ensureSignalState(signal);
   if (!state.audioOn || !state.audioNode || !state.values.length || !audioContext) return;
+  if (signal.value_fresh === false) { stopAudio(signal.id); return; }
   const recent = state.values.slice(-250).map(function(v) { return MUSE_BAND_IDS.includes(signal.id) ? 10 * Math.log10(Math.max(1e-12, v)) : v; });
   let min = Math.min.apply(null, recent);
   let max = Math.max.apply(null, recent);
@@ -5801,7 +5922,7 @@ function syncBandAudio() {
     const id = button.dataset.bandAudio;
     const signal = catalog.signals.find(function(x) { return x.id === id; });
     const on = Boolean(signalState[id] && signalState[id].audioOn);
-    button.disabled = !signal || !signal.connected || !signal.running;
+    button.disabled = !signal || !signal.connected || !signal.running || signal.value_fresh === false;
     button.textContent = (on ? "🔊 " : "🔇 ") + MUSE_BANDS.find(function(b) { return b.id === id; }).label;
     button.classList.toggle("audio-on", on);
     button.setAttribute("aria-pressed", String(on));
@@ -5843,6 +5964,7 @@ function deviceName(d) {
 
 function selectDiagnosticDevice(d, row) {
   diagnosticDevice = d;
+  updateDiagnosticControls();
   document.querySelectorAll(".device-table tr").forEach(function(r) {
     r.classList.remove("selected");
   });
@@ -5860,6 +5982,11 @@ function renderDiagnosticDevices(devices) {
     : diagnosticDevices.filter(function(d) { return !d.obviously_unrelated; });
   const hidden = diagnosticDevices.length - visible.length;
 
+  if (diagnosticDevice && !visible.some(function(d) { return d.path_token === diagnosticDevice.path_token; })) {
+    diagnosticDevice = null;
+    document.getElementById("selectedDevice").textContent = "No device selected";
+  }
+  updateDiagnosticControls();
   if (!diagnosticDevices.length) {
     host.innerHTML = '<div class="small" style="margin-top:12px">No HID devices found.</div>';
     return;
@@ -5890,13 +6017,13 @@ function renderDiagnosticDevices(devices) {
   host.querySelectorAll("tr[data-device-index]").forEach(function(row) {
     const index = Number(row.dataset.deviceIndex);
     row.querySelector(".select-device").onclick = function() {
+      if (diagnosticsBusy) return;
       selectDiagnosticDevice(visible[index], row);
     };
   });
 
-  const preferred = visible.findIndex(function(d) {
-    return d.vendor_id === 0x0e30 && d.product_id === 0x0002;
-  });
+  const selected = diagnosticDevice && visible.findIndex(function(d) { return d.path_token === diagnosticDevice.path_token; });
+  const preferred = selected != null && selected >= 0 ? selected : visible.findIndex(function(d) { return d.vendor_id === 0x0e30 && d.product_id === 0x0002; });
   if (preferred >= 0) {
     const row = host.querySelector('tr[data-device-index="' + preferred + '"]');
     selectDiagnosticDevice(visible[preferred], row);
@@ -5906,8 +6033,9 @@ function renderDiagnosticDevices(devices) {
 function scanDevices() {
   const output = document.getElementById("diagOutput");
   output.textContent = "Scanning HID devices...";
-  fetch("/api/devices")
-    .then(r => r.json())
+  if (diagnosticsBusy) return;
+  diagnosticsBusy = true; diagnosticText = ""; updateDiagnosticControls();
+  return fetchJson("/api/devices")
     .then(function(data) {
       diagnosticDevices = data.devices || [];
       renderDiagnosticDevices(diagnosticDevices);
@@ -5917,16 +6045,25 @@ function scanDevices() {
         (hidden ? " " + hidden + " obviously unrelated device(s) hidden by default." : "") +
         " Select one to test or capture.";
     })
-    .catch(function(err) { output.textContent = String(err); });
+    .catch(function(err) { output.textContent = String(err); })
+    .finally(function() { diagnosticsBusy = false; updateDiagnosticControls(); });
 }
 
 document.getElementById("scanBtn").onclick = scanDevices;
 document.getElementById("showAllDevices").onchange = function() {
   renderDiagnosticDevices(diagnosticDevices);
 };
+function updateDiagnosticControls() {
+  ["testDeviceBtn", "captureDeviceBtn"].forEach(function(id) { document.getElementById(id).disabled = diagnosticsBusy || !diagnosticDevice; });
+  document.getElementById("scanBtn").disabled = diagnosticsBusy;
+  document.getElementById("showAllDevices").disabled = diagnosticsBusy;
+  document.getElementById("captureSeconds").disabled = diagnosticsBusy;
+}
 document.getElementById("testDeviceBtn").onclick = function() {
   const output = document.getElementById("diagOutput");
   if (!diagnosticDevice) { output.textContent = "Select a device first."; return; }
+  if (diagnosticsBusy) return;
+  diagnosticsBusy = true; updateDiagnosticControls(); diagnosticText = "";
   output.textContent = "Testing access to " + deviceName(diagnosticDevice) + "...";
   post("diag_test", {path: diagnosticDevice.path_token}).then(function(result) {
     if (!result.ok) throw new Error(result.error || "Device test failed.");
@@ -5934,12 +6071,22 @@ document.getElementById("testDeviceBtn").onclick = function() {
       "Opened successfully.\n" + deviceName(diagnosticDevice) + "\n" +
       diagnosticDevice.vendor_hex + ":" + diagnosticDevice.product_hex;
     output.textContent = diagnosticText;
-  }).catch(function(err) { output.textContent = String(err); });
+  }).catch(function(err) { output.textContent = String(err); })
+    .finally(function() { diagnosticsBusy = false; updateDiagnosticControls(); });
 };
 document.getElementById("captureDeviceBtn").onclick = function() {
   const output = document.getElementById("diagOutput");
   if (!diagnosticDevice) { output.textContent = "Select a device first."; return; }
+  if (diagnosticsBusy) return;
+  diagnosticsBusy = true; diagnosticText = ""; updateDiagnosticControls();
   const seconds = Number(document.getElementById("captureSeconds").value || 5);
+  const progress = document.getElementById("captureProgress"), started = performance.now();
+  progress.hidden = false; progress.value = 0;
+  const ticker = setInterval(function() {
+    const elapsed = (performance.now() - started)/1000;
+    progress.value = Math.min(95, elapsed/seconds*100);
+    output.textContent = "Capturing " + deviceName(diagnosticDevice) + " · " + elapsed.toFixed(1) + "s / " + seconds + "s" + (elapsed > seconds ? " · saving…" : "");
+  }, 100);
   output.textContent = "Capturing " + seconds + " seconds from " + deviceName(diagnosticDevice) + "...";
   post("diag_capture", {path: diagnosticDevice.path_token, seconds: seconds})
     .then(function(result) {
@@ -5947,11 +6094,12 @@ document.getElementById("captureDeviceBtn").onclick = function() {
       diagnosticText = result.result.summary || "";
       output.textContent = diagnosticText + "\n\nSaved locally: " + result.result.saved_path;
     })
-    .catch(function(err) { output.textContent = String(err); });
+    .catch(function(err) { output.textContent = String(err); })
+    .finally(function() { clearInterval(ticker); progress.hidden = true; diagnosticsBusy = false; updateDiagnosticControls(); });
 };
 document.getElementById("copyDiagBtn").onclick = function() {
   const output = document.getElementById("diagOutput");
-  const text = diagnosticText || output.textContent;
+  const text = output.textContent;
   if (!text) return;
   navigator.clipboard.writeText(text).then(function() {
     output.textContent += "\n\n[Copied to clipboard]";
@@ -5959,6 +6107,39 @@ document.getElementById("copyDiagBtn").onclick = function() {
     output.textContent += "\n\nClipboard access failed. Select the report and copy it manually.";
   });
 };
+function openCameraWorkspace() {
+  deviceViewState.camera = true; saveDeviceViewState(); deviceViewSignature = "";
+  renderDeviceViewControls(catalog.devices); syncCameraViewVisibility(); switchTab("use");
+  document.getElementById("cameraLab").scrollIntoView({block:"start"});
+}
+document.getElementById("openCamera").onclick = openCameraWorkspace;
+document.getElementById("quitApp").onclick = function() {
+  Object.keys(signalState).forEach(function(id) { stopAudio(id, false); });
+  if (cameraStream || cameraStarting) cameraStopLocal(false);
+  post("quit").then(function() { document.getElementById("connectionBanner").hidden = false; });
+};
+document.getElementById("jumpDevice").onchange = function() {
+  const section = document.getElementById("section_" + domId(this.value));
+  if (section) section.scrollIntoView({block:"start"});
+  this.value = "";
+};
+document.getElementById("compactPanels").onclick = function() {
+  visibleSignals(catalog.signals).forEach(function(s) { panelViewState[s.id] = "mini"; });
+  savePanelViewState(); signalSignature = ""; applyCatalog(catalog);
+};
+document.getElementById("resetLayout").onclick = function() {
+  panelViewState = {}; panelOrder = null; savePanelViewState(); savePanelOrder();
+  signalSignature = ""; applyCatalog(catalog);
+};
+document.getElementById("retryService").onclick = refreshAll;
+document.getElementById("signalSearch").oninput = function() {
+  signalSearch = this.value.trim().toLowerCase(); signalSignature = "";
+  applyCatalog(catalog); requestAnimationFrame(drawAllSignals);
+};
+window.addEventListener("pagehide", function() {
+  Object.keys(signalState).forEach(function(id) { stopAudio(id, false); });
+  if (cameraStream || cameraStarting) cameraStopLocal(false);
+});
 document.getElementById("captureFolderBtn").onclick = function() { post("reveal_captures"); };
 
 window.addEventListener("resize", function() {
@@ -6169,6 +6350,13 @@ class Handler(BaseHTTPRequestHandler):
                 STATE.set_emwave_running(False)
             elif action == "stop":
                 STATE.set_running(False)
+            elif action == "quit":
+                STATE.stop_recording()
+                STATE.shutdown = True
+                self.send_json({"ok": True})
+                if SERVER is not None:
+                    threading.Thread(target=SERVER.shutdown, daemon=True).start()
+                return
             elif action == "record_start":
                 STATE.start_recording()
             elif action == "record_stop":
@@ -6212,11 +6400,24 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    global STATE
-    STATE = BiofeedbackState()
-
+    global STATE, SERVER
     url = f"http://{HOST}:{PORT}"
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    try:
+        server = ThreadingHTTPServer((HOST, PORT), Handler)
+    except OSError:
+        # Check an existing service before opening any USB or Bluetooth devices.
+        try:
+            with urllib.request.urlopen(url + "/api/status", timeout=2) as response:
+                existing = "BiofeedbackPlay/" in response.headers.get("Server", "")
+            if existing:
+                print("Biofeedback Play is already running. Opening its window.")
+                webbrowser.open(url)
+                return
+        except Exception:
+            pass
+        raise RuntimeError(f"Port {PORT} is in use. Quit the other local service and relaunch Biofeedback Play.") from None
+    SERVER = server
+    STATE = BiofeedbackState()
 
     print("Biofeedback Play")
     print("Open:", url)
@@ -6233,6 +6434,9 @@ def main() -> None:
     finally:
         STATE.shutdown = True
         STATE.stop_recording()
+        for worker in (STATE.muse_thread, STATE.emwave_thread, STATE.thread, STATE.analysis_thread):
+            worker.join(timeout=3)
+        STATE.osc_socket.close()
         server.server_close()
 
 

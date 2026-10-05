@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import biofeedback_play as app
-from physiology import muse_contact_quality
+from physiology import muse_contact_quality, eeg_metrics
 
 
 class OutputTests(unittest.TestCase):
@@ -65,3 +65,45 @@ class OutputTests(unittest.TestCase):
         samples = [dict(tp9=1000, fp1=1000, fp2=1000, tp10=1000) for _ in range(1000)]
         quality = muse_contact_quality(samples, 500)
         self.assertTrue(all(item['level'] == 'unknown' for item in quality.values()))
+
+    def test_stale_derived_results_are_explicitly_marked(self):
+        with patch('threading.Thread.start'):
+            state = app.BiofeedbackState()
+            try:
+                state._store_muse_eeg({'microvolts': (1, 2, 3, 4)})
+                state._store_derived('muse.band.alpha', 100, -10)
+                signal = next(s for s in state.signal_catalog() if s['id'] == 'muse.band.alpha')
+                self.assertTrue(signal['connected'])
+                self.assertFalse(signal['value_fresh'])
+                state._store_derived('muse.band.alpha', 200, 0)
+                signal = next(s for s in state.signal_catalog() if s['id'] == 'muse.band.alpha')
+                self.assertTrue(signal['value_fresh'])
+            finally:
+                state.osc_socket.close()
+
+    def test_diagnostics_guard_additional_live_emwave_slots(self):
+        with patch('threading.Thread.start'):
+            state = app.BiofeedbackState()
+            try:
+                state.emwave_extra_units[2]['connected'] = True
+                meta = {'vendor_id': app.EMWAVE_VENDOR_ID, 'product_id': app.EMWAVE_PRODUCT_ID}
+                with patch.object(app, 'STATE', state):
+                    with self.assertRaisesRegex(RuntimeError, 'Stop emWave acquisition'):
+                        app.ensure_hid_available_for_diagnostics(meta)
+                    state.set_device_running('emwave2', False)
+                    app.ensure_hid_available_for_diagnostics(meta)
+            finally:
+                state.osc_socket.close()
+
+    def test_eeg_rms_does_not_measure_different_electrode_offsets(self):
+        samples = [dict(tp9=1000, fp1=1100, fp2=1200, tp10=1300) for _ in range(200)]
+        self.assertEqual(eeg_metrics(samples, 100)['broadband_rms'], 0.0)
+
+    def test_second_launch_does_not_open_sensor_workers(self):
+        from unittest.mock import MagicMock
+        response = MagicMock()
+        response.__enter__.return_value.headers = {'Server': 'BiofeedbackPlay/0.1'}
+        with patch.object(app, 'ThreadingHTTPServer', side_effect=OSError), patch.object(app, 'BiofeedbackState') as ctor, patch.object(app.urllib.request, 'urlopen', return_value=response), patch.object(app.webbrowser, 'open') as open_browser, patch('builtins.print'):
+            app.main()
+            ctor.assert_not_called()
+            open_browser.assert_called_once()

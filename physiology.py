@@ -557,9 +557,11 @@ def eeg_metrics(
     }
 
     per_channel_band: dict[str, dict[str, float]] = {}
+    centered_values: list[float] = []
     for channel, values in channels.items():
         mean = statistics.fmean(values)
         centered = [v - mean for v in values]
+        centered_values.extend(centered)
         per_channel_band[channel] = {}
         for name, (low, high) in bands.items():
             power = _band_power(centered, sample_rate, low, high)
@@ -571,9 +573,9 @@ def eeg_metrics(
         if values:
             result[name] = statistics.fmean(values)
 
-    all_values = [v for values in channels.values() for v in values]
-    mean = statistics.fmean(all_values)
-    result["broadband_rms"] = math.sqrt(statistics.fmean([(v - mean) ** 2 for v in all_values]))
+    # Each electrode has its own DC offset. Pool only centered fluctuations;
+    # differences between electrode baselines are not broadband EEG activity.
+    result["broadband_rms"] = math.sqrt(statistics.fmean(v ** 2 for v in centered_values))
 
     left = per_channel_band.get("fp1", {}).get("alpha_power")
     right = per_channel_band.get("fp2", {}).get("alpha_power")

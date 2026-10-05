@@ -313,3 +313,19 @@ listening. Raw EEG remains full rate and contact metadata is experimental.
 Verification: `python -m unittest discover -s tests -q` and `node tests/test_ui.js`.
 The JavaScript checks exercise graph and audio logic with a simulated browser API;
 Safari layout, speaker output, and physical devices require a Mac check.
+
+### Workspace and lifecycle improvements
+
+- Find signal searches names, device names, and IDs. Empty filtered views offer Clear filters.
+- Jump to device, Open camera, Compact panels, and Reset panel layout reduce navigation through many streams.
+- Keyboard arrow keys switch tabs; tabs and filters expose selected state to assistive technology.
+- Derived values older than three seconds show Waiting for valid data and stop sonification; battery uses a 30-second telemetry window.
+- Filtered-out audio continues receiving data. Service loss mutes audio, shows recovery instructions, and reconnects automatically. A new service session resets graph cursors.
+- Camera startup can be cancelled; late camera permission responses and playback failures release tracks. Camera errors offer specific recovery instructions.
+- Diagnostics preserve selection across scans, disable concurrent work, show timed capture progress, and copy the currently displayed report. Testing/capturing requires stopping live acquisition on all emWave modules.
+- Quit app in Device setup closes recording and device workers. A second launcher invocation opens the existing app without starting competing sensor workers.
+- EEG broadband RMS now centers each electrode separately so differing electrode DC offsets are not counted as EEG fluctuations.
+
+Optional browser regressions use Playwright: `node tests/test_browser.cjs`.
+Set `BIOFEEDBACK_BROWSER_EXECUTABLE` if using a custom Chromium binary. The fixture uses synthetic hardware and fake camera input; it does not connect to physical devices.
+See `docs/UXReview.md` for the scope and validation of this review.
