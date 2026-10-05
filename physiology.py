@@ -475,6 +475,51 @@ def _band_power(values: list[float], sample_rate: float, low: float, high: float
     return sum(powers.values()) / len(powers)
 
 
+def muse_contact_quality(
+    samples: Iterable[dict],
+    sample_rate: float,
+    channel_names: tuple[str, ...] = ("tp9", "fp1", "fp2", "tp10"),
+) -> dict[str, dict[str, float | str]]:
+    """Estimate per-electrode Muse contact from recent raw EEG variation.
+
+    InteraXon's exact horseshoe algorithm is proprietary. Mind Monitor's author
+    describes it as being driven by RAW EEG variance, with lower recent spread
+    indicating better contact and roughly sub-50 uV variation being desirable.
+    We use a robust 5th-to-95th percentile span so isolated blinks do not
+    dominate the indicator. Thresholds are intentionally labeled experimental
+    because MU-01 microvolt scaling has not been independently calibrated.
+    """
+    data = list(samples)
+    required = max(32, int(sample_rate * 0.75))
+    if len(data) < required:
+        return {}
+
+    data = data[-max(required, int(sample_rate * 2.0)) :]
+    result: dict[str, dict[str, float | str]] = {}
+
+    for channel in channel_names:
+        values = [float(sample[channel]) for sample in data if channel in sample]
+        if len(values) < required:
+            continue
+        p05 = _percentile(values, 0.05)
+        p95 = _percentile(values, 0.95)
+        spread = max(0.0, p95 - p05)
+
+        if spread <= 50.0:
+            level = "good"
+        elif spread <= 100.0:
+            level = "fair"
+        else:
+            level = "poor"
+
+        result[channel] = {
+            "level": level,
+            "spread_uv": round(spread, 2),
+        }
+
+    return result
+
+
 def eeg_metrics(
     samples: Iterable[dict],
     sample_rate: float,
