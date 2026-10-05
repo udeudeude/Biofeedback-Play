@@ -5550,6 +5550,18 @@ function pollSignals() {
     const state = ensureSignalState(signal);
     return signalPanelIsDrawable(signal) || state.audioOn || MUSE_BAND_IDS.includes(signal.id);
   });
+
+  // The combined Muse band card is a device-level summary rather than one of
+  // the individual derived cards. Keep its five low-rate source signals fresh
+  // even when the user is filtering the panel grid to direct signals only.
+  if (document.getElementById("museBandCanvas")) {
+    MUSE_BAND_IDS.forEach(function(signalId) {
+      if (signals.some(function(signal) { return signal.id === signalId; })) return;
+      const signal = catalog.signals.find(function(item) { return item.id === signalId; });
+      if (signal && signal.connected && signal.running) signals.push(signal);
+    });
+  }
+
   if (!signals.length) return;
 
   const after = {};
