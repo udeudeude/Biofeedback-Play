@@ -4655,7 +4655,8 @@ function renderMuseLiveSummary(device) {
     const spread = Number.isFinite(Number(info.spread_uv))
       ? " · " + Number(info.spread_uv).toFixed(0) + " µV spread"
       : "";
-    return '<span class="muse-contact-sensor ' + level + '" title="' +
+    return '<span class="muse-contact-sensor ' + level + '" data-muse-contact="' +
+      escapeHtml(spec[0]) + '" title="' +
       escapeHtml(spec[2] + spread + " · experimental contact estimate") + '">' +
       '<span class="muse-contact-dot"></span><span>' + escapeHtml(spec[1]) + '</span></span>';
   }).join("");
@@ -4670,9 +4671,9 @@ function renderMuseLiveSummary(device) {
   return '<div class="muse-live-summary">' +
     '<div class="muse-status-strip">' +
       '<div class="muse-battery" title="Muse battery telemetry arrives about every 10 seconds">' +
-        '<span class="muse-battery-shell"><span class="muse-battery-fill" style="--battery-level:' +
+        '<span class="muse-battery-shell"><span id="museBatteryFill" class="muse-battery-fill" style="--battery-level:' +
           batteryLevel.toFixed(0) + '%"></span></span>' +
-        '<span><strong>Battery</strong> ' + escapeHtml(batteryText) + '</span>' +
+        '<span><strong>Battery</strong> <span id="museBatteryText">' + escapeHtml(batteryText) + '</span></span>' +
       '</div>' +
       '<div class="muse-contact">' +
         '<span class="muse-contact-label">Estimated electrode contact</span>' + sensors +
@@ -4687,6 +4688,37 @@ function renderMuseLiveSummary(device) {
       '<div class="muse-band-legend">' + legend + '</div>' +
     '</div>' +
   '</div>';
+}
+
+function updateMuseLiveSummary(device) {
+  const batteryFill = document.getElementById("museBatteryFill");
+  const batteryText = document.getElementById("museBatteryText");
+  const percent = device && device.battery && device.battery.percentage != null
+    ? Math.max(0, Math.min(100, Number(device.battery.percentage)))
+    : null;
+  if (batteryFill) {
+    batteryFill.style.setProperty("--battery-level", (percent == null ? 0 : percent).toFixed(0) + "%");
+  }
+  if (batteryText) {
+    batteryText.textContent = percent == null ? "waiting for battery" : percent.toFixed(0) + "%";
+  }
+
+  const contact = device && device.contact_quality ? device.contact_quality : {};
+  document.querySelectorAll("[data-muse-contact]").forEach(function(node) {
+    const channel = node.dataset.museContact;
+    const info = contact[channel] || {};
+    const level = ["good", "fair", "poor"].includes(info.level) ? info.level : "unknown";
+    node.classList.remove("good", "fair", "poor", "unknown");
+    node.classList.add(level);
+    const label = channel === "tp9" ? "left ear" :
+      channel === "fp1" ? "left forehead" :
+      channel === "fp2" ? "right forehead" :
+      channel === "tp10" ? "right ear" : channel;
+    const spread = Number.isFinite(Number(info.spread_uv))
+      ? " · " + Number(info.spread_uv).toFixed(0) + " µV spread"
+      : "";
+    node.title = label + spread + " · experimental contact estimate";
+  });
 }
 
 function renderSignalPanels(signals) {
@@ -5289,6 +5321,8 @@ function applyCatalog(data) {
     renderSignalPanels(displayed);
   }
   updateSignalPanels(displayed);
+  const museDevice = catalog.devices.find(function(device) { return device.id === "muse"; });
+  if (museDevice) updateMuseLiveSummary(museDevice);
   if (!document.activeElement || document.activeElement.id !== "musePortSelect") {
     renderDeviceSetup(catalog.devices);
   }
