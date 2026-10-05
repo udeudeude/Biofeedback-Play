@@ -35,6 +35,7 @@ from physiology import (
     camera_pulse_metrics,
     eeg_metrics,
     motion_metrics,
+    muse_contact_quality,
     pair_metrics,
     pulse_metrics,
     skin_metrics,
@@ -1301,6 +1302,7 @@ class BiofeedbackState:
         self.muse_passive_probe = ""
         self.muse_afe_gain = None
         self.muse_battery = None
+        self.muse_contact_quality = {}
         self.muse_last_data_monotonic = 0.0
         self.muse_last_eeg_monotonic = 0.0
         self.muse_last_accel_monotonic = 0.0
@@ -1569,6 +1571,7 @@ class BiofeedbackState:
                     "passive_probe": self.muse_passive_probe,
                     "afe_gain": self.muse_afe_gain,
                     "battery": self.muse_battery,
+                    "contact_quality": dict(self.muse_contact_quality),
                 },
                 "camera": {
                     "connected": (
@@ -2015,6 +2018,9 @@ class BiofeedbackState:
                 eeg = eeg_metrics(muse_eeg, MUSE_EEG_RATE)
                 for key, signal_id in eeg_map.items():
                     self._store_derived(signal_id, eeg.get(key), elapsed)
+                contact = muse_contact_quality(muse_eeg, MUSE_EEG_RATE)
+                with self.lock:
+                    self.muse_contact_quality = contact
                 motion = motion_metrics(muse_accel)
                 self._store_derived(
                     "muse.motion_intensity", motion.get("motion_intensity"), elapsed
@@ -2579,6 +2585,7 @@ class BiofeedbackState:
                     client.close()
                 with self.lock:
                     self.muse_connected = False
+                    self.muse_contact_quality = {}
 
     def _emwave_manager_loop(self) -> None:
         """Own all emWave HID handles in one thread.
@@ -2937,6 +2944,70 @@ input.port { width: 90px; }
 .device-section-counts {
   color: #d7dce8; font-size: 12px; font-weight: 650;
 }
+.muse-live-summary {
+  margin: 12px 14px 2px; padding: 12px;
+  border: 1px solid var(--line); border-radius: 14px;
+  background: rgba(21,24,33,.72);
+}
+.muse-status-strip {
+  display: flex; gap: 16px; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; margin-bottom: 12px;
+}
+.muse-battery {
+  display: inline-flex; align-items: center; gap: 8px; min-width: 120px;
+  font-size: 12px; color: var(--muted);
+}
+.muse-battery-shell {
+  position: relative; width: 34px; height: 16px; padding: 2px;
+  border: 1.5px solid currentColor; border-radius: 4px;
+}
+.muse-battery-shell::after {
+  content: ""; position: absolute; width: 3px; height: 8px; right: -5px; top: 2.5px;
+  border-radius: 0 2px 2px 0; background: currentColor;
+}
+.muse-battery-fill {
+  display: block; height: 100%; border-radius: 2px;
+  background: var(--good); width: var(--battery-level, 0%);
+}
+.muse-contact {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+}
+.muse-contact-label {
+  color: var(--muted); font-size: 11px; margin-right: 2px;
+}
+.muse-contact-sensor {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 7px; border-radius: 999px; border: 1px solid var(--line);
+  font-size: 11px; background: var(--soft);
+}
+.muse-contact-dot {
+  width: 10px; height: 10px; border-radius: 50%; background: #7d8493;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.24);
+}
+.muse-contact-sensor.good .muse-contact-dot { background: var(--good); }
+.muse-contact-sensor.fair .muse-contact-dot { background: #e9b949; }
+.muse-contact-sensor.poor .muse-contact-dot { background: var(--bad); }
+.muse-band-overview {
+  border-top: 1px solid rgba(52,59,78,.7); padding-top: 11px;
+}
+.muse-band-overview-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 10px; flex-wrap: wrap; margin-bottom: 8px;
+}
+.muse-band-overview-title { font-weight: 720; font-size: 14px; }
+.muse-band-overview-note { color: var(--muted); font-size: 10px; }
+.muse-band-overview canvas {
+  width: 100%; height: 150px; display: block; border-radius: 10px;
+  background: #0d1017;
+}
+.muse-band-legend {
+  display: flex; gap: 8px 14px; flex-wrap: wrap; margin-top: 8px;
+  font-size: 11px;
+}
+.muse-band-key { display: inline-flex; gap: 5px; align-items: center; }
+.muse-band-swatch { width: 10px; height: 3px; border-radius: 2px; background: var(--band-color); }
+html[data-theme="light"] .muse-live-summary { background: rgba(255,255,255,.84); }
+html[data-theme="light"] .muse-band-overview canvas { background: #eef1f6; }
 .signal-subsection { padding: 14px 14px 4px; }
 .signal-subsection + .signal-subsection { border-top: 1px solid rgba(52,59,78,.62); }
 .signal-subsection-heading {
@@ -3643,7 +3714,10 @@ function setTheme(theme) {
     button.textContent = next === "light" ? "Dark mode" : "Light mode";
     button.setAttribute("aria-label", next === "light" ? "Switch to dark mode" : "Switch to light mode");
   }
-  requestAnimationFrame(drawAllSignals);
+  requestAnimationFrame(function() {
+    drawAllSignals();
+    drawMuseBandOverview();
+  });
 }
 
 function loadPanelOrder() {
@@ -3728,6 +3802,15 @@ const DEVICE_COLORS = {
   muse: "#7f9cf5",
   camera: "#f28b63"
 };
+
+const MUSE_BANDS = [
+  {id: "muse.band.delta", key: "delta", label: "Delta", range: "1–4 Hz", color: "#ef5b5b"},
+  {id: "muse.band.theta", key: "theta", label: "Theta", range: "4–8 Hz", color: "#a678e8"},
+  {id: "muse.band.alpha", key: "alpha", label: "Alpha", range: "8–13 Hz", color: "#4ca8dd"},
+  {id: "muse.band.beta", key: "beta", label: "Beta", range: "13–30 Hz", color: "#72b36a"},
+  {id: "muse.band.gamma", key: "gamma", label: "Gamma", range: "30–45 Hz", color: "#e6a64c"}
+];
+const MUSE_BAND_IDS = MUSE_BANDS.map(function(item) { return item.id; });
 
 function deviceColor(deviceId) {
   return DEVICE_COLORS[deviceId] || "#8b7cf6";
@@ -4552,6 +4635,92 @@ function renderSignalCard(signal) {
   );
 }
 
+function renderMuseLiveSummary(device) {
+  const batteryPercent = device && device.battery && device.battery.percentage != null
+    ? Math.max(0, Math.min(100, Number(device.battery.percentage)))
+    : null;
+  const batteryText = batteryPercent == null ? "waiting for battery" : batteryPercent.toFixed(0) + "%";
+  const batteryLevel = batteryPercent == null ? 0 : batteryPercent;
+  const contact = device && device.contact_quality ? device.contact_quality : {};
+  const sensorSpecs = [
+    ["tp9", "TP9", "left ear"],
+    ["fp1", "FP1", "left forehead"],
+    ["fp2", "FP2", "right forehead"],
+    ["tp10", "TP10", "right ear"]
+  ];
+
+  const sensors = sensorSpecs.map(function(spec) {
+    const info = contact[spec[0]] || {};
+    const level = ["good", "fair", "poor"].includes(info.level) ? info.level : "unknown";
+    const spread = Number.isFinite(Number(info.spread_uv))
+      ? " · " + Number(info.spread_uv).toFixed(0) + " µV spread"
+      : "";
+    return '<span class="muse-contact-sensor ' + level + '" data-muse-contact="' +
+      escapeHtml(spec[0]) + '" title="' +
+      escapeHtml(spec[2] + spread + " · experimental contact estimate") + '">' +
+      '<span class="muse-contact-dot"></span><span>' + escapeHtml(spec[1]) + '</span></span>';
+  }).join("");
+
+  const legend = MUSE_BANDS.map(function(band) {
+    return '<span class="muse-band-key">' +
+      '<span class="muse-band-swatch" style="--band-color:' + band.color + '"></span>' +
+      '<span><strong>' + band.label + '</strong> ' + band.range +
+      ' · <span id="museBandValue_' + band.key + '">—</span></span></span>';
+  }).join("");
+
+  return '<div class="muse-live-summary">' +
+    '<div class="muse-status-strip">' +
+      '<div class="muse-battery" title="Muse battery telemetry arrives about every 10 seconds">' +
+        '<span class="muse-battery-shell"><span id="museBatteryFill" class="muse-battery-fill" style="--battery-level:' +
+          batteryLevel.toFixed(0) + '%"></span></span>' +
+        '<span><strong>Battery</strong> <span id="museBatteryText">' + escapeHtml(batteryText) + '</span></span>' +
+      '</div>' +
+      '<div class="muse-contact">' +
+        '<span class="muse-contact-label">Estimated electrode contact</span>' + sensors +
+      '</div>' +
+    '</div>' +
+    '<div class="muse-band-overview">' +
+      '<div class="muse-band-overview-head">' +
+        '<div class="muse-band-overview-title">EEG frequency bands</div>' +
+        '<div class="muse-band-overview-note">Combined display in dB relative to 1 µV² · experimental</div>' +
+      '</div>' +
+      '<canvas id="museBandCanvas"></canvas>' +
+      '<div class="muse-band-legend">' + legend + '</div>' +
+    '</div>' +
+  '</div>';
+}
+
+function updateMuseLiveSummary(device) {
+  const batteryFill = document.getElementById("museBatteryFill");
+  const batteryText = document.getElementById("museBatteryText");
+  const percent = device && device.battery && device.battery.percentage != null
+    ? Math.max(0, Math.min(100, Number(device.battery.percentage)))
+    : null;
+  if (batteryFill) {
+    batteryFill.style.setProperty("--battery-level", (percent == null ? 0 : percent).toFixed(0) + "%");
+  }
+  if (batteryText) {
+    batteryText.textContent = percent == null ? "waiting for battery" : percent.toFixed(0) + "%";
+  }
+
+  const contact = device && device.contact_quality ? device.contact_quality : {};
+  document.querySelectorAll("[data-muse-contact]").forEach(function(node) {
+    const channel = node.dataset.museContact;
+    const info = contact[channel] || {};
+    const level = ["good", "fair", "poor"].includes(info.level) ? info.level : "unknown";
+    node.classList.remove("good", "fair", "poor", "unknown");
+    node.classList.add(level);
+    const label = channel === "tp9" ? "left ear" :
+      channel === "fp1" ? "left forehead" :
+      channel === "fp2" ? "right forehead" :
+      channel === "tp10" ? "right ear" : channel;
+    const spread = Number.isFinite(Number(info.spread_uv))
+      ? " · " + Number(info.spread_uv).toFixed(0) + " µV spread"
+      : "";
+    node.title = label + spread + " · experimental contact estimate";
+  });
+}
+
 function renderSignalPanels(signals) {
   const grid = document.getElementById("signalGrid");
   if (!signals.length) {
@@ -4612,6 +4781,10 @@ function renderSignalPanels(signals) {
           '</div>' +
         '</div>';
 
+    if (deviceId === "muse") {
+      html += renderMuseLiveSummary(device || {});
+    }
+
     if (direct.length) {
       html +=
         '<div class="signal-subsection">' +
@@ -4666,6 +4839,9 @@ function renderSignalPanels(signals) {
     };
   });
   observeSignalPanels(signals);
+  if (signals.some(function(signal) { return MUSE_BAND_IDS.includes(signal.id); })) {
+    requestAnimationFrame(drawMuseBandOverview);
+  }
 }
 
 function clearDropIndicators() {
@@ -5145,6 +5321,8 @@ function applyCatalog(data) {
     renderSignalPanels(displayed);
   }
   updateSignalPanels(displayed);
+  const museDevice = catalog.devices.find(function(device) { return device.id === "muse"; });
+  if (museDevice) updateMuseLiveSummary(museDevice);
   if (!document.activeElement || document.activeElement.id !== "musePortSelect") {
     renderDeviceSetup(catalog.devices);
   }
@@ -5272,6 +5450,69 @@ function drawAllSignals() {
   visibleSignals(catalog.signals).forEach(drawSignal);
 }
 
+function drawMuseBandOverview() {
+  const canvas = document.getElementById("museBandCanvas");
+  if (!canvas || document.hidden || !liveDataTabActive()) return;
+
+  const size = fitCanvas(canvas);
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, size.w, size.h);
+
+  ctx.strokeStyle = "#202635";
+  ctx.lineWidth = size.ratio;
+  for (let i = 1; i < 4; i++) {
+    const y = size.h * i / 4;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(size.w, y);
+    ctx.stroke();
+  }
+
+  const series = [];
+  MUSE_BANDS.forEach(function(band) {
+    const signal = catalog.signals.find(function(item) { return item.id === band.id; });
+    if (!signal) return;
+    const state = ensureSignalState(signal);
+    const raw = state.values.slice(-120);
+    const dbValues = raw
+      .filter(function(value) { return Number.isFinite(Number(value)) && Number(value) > 0; })
+      .map(function(value) { return 10 * Math.log10(Number(value)); });
+    if (!dbValues.length) return;
+    series.push({band: band, values: dbValues});
+    const latest = dbValues[dbValues.length - 1];
+    const node = document.getElementById("museBandValue_" + band.key);
+    if (node) node.textContent = latest.toFixed(1) + " dB";
+  });
+
+  if (!series.length) return;
+
+  const all = [];
+  series.forEach(function(item) {
+    item.values.forEach(function(value) { all.push(value); });
+  });
+  let min = Math.min.apply(null, all);
+  let max = Math.max.apply(null, all);
+  if (max === min) { min -= 1; max += 1; }
+  const padding = Math.max(1, (max - min) * 0.08);
+  min -= padding;
+  max += padding;
+
+  series.forEach(function(item) {
+    const values = item.values;
+    ctx.strokeStyle = item.band.color;
+    ctx.lineWidth = 1.6 * size.ratio;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    values.forEach(function(value, index) {
+      const x = index * size.w / Math.max(1, values.length - 1);
+      const y = size.h - ((value - min) / (max - min)) * size.h;
+      if (index === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  });
+}
+
 function formatSignalValue(signal, value) {
   if (value == null || !Number.isFinite(Number(value))) return "—";
   const numeric = Number(value);
@@ -5307,8 +5548,20 @@ function pollSignals() {
   const signals = visibleSignals(catalog.signals).filter(function(signal) {
     if (!(signal.connected && signal.running)) return false;
     const state = ensureSignalState(signal);
-    return signalPanelIsDrawable(signal) || state.audioOn;
+    return signalPanelIsDrawable(signal) || state.audioOn || MUSE_BAND_IDS.includes(signal.id);
   });
+
+  // The combined Muse band card is a device-level summary rather than one of
+  // the individual derived cards. Keep its five low-rate source signals fresh
+  // even when the user is filtering the panel grid to direct signals only.
+  if (document.getElementById("museBandCanvas")) {
+    MUSE_BAND_IDS.forEach(function(signalId) {
+      if (signals.some(function(signal) { return signal.id === signalId; })) return;
+      const signal = catalog.signals.find(function(item) { return item.id === signalId; });
+      if (signal && signal.connected && signal.running) signals.push(signal);
+    });
+  }
+
   if (!signals.length) return;
 
   const after = {};
@@ -5324,6 +5577,7 @@ function pollSignals() {
     .then(r => r.json())
     .then(function(data) {
       const samplesBySignal = data.samples || {};
+      let museBandsChanged = false;
       signals.forEach(function(signal) {
         const state = ensureSignalState(signal);
         const samples = samplesBySignal[signal.id] || [];
@@ -5340,8 +5594,10 @@ function pollSignals() {
         if (samples.length) {
           updateSignalNumbers(signal);
           drawSignal(signal);
+          if (MUSE_BAND_IDS.includes(signal.id)) museBandsChanged = true;
         }
       });
+      if (museBandsChanged) requestAnimationFrame(drawMuseBandOverview);
     })
     .catch(function(err) {
       document.getElementById("error").textContent = String(err);
@@ -5551,11 +5807,17 @@ document.getElementById("copyDiagBtn").onclick = function() {
 document.getElementById("captureFolderBtn").onclick = function() { post("reveal_captures"); };
 
 window.addEventListener("resize", function() {
-  if (document.getElementById("tab-use").classList.contains("active")) drawAllSignals();
+  if (document.getElementById("tab-use").classList.contains("active")) {
+    drawAllSignals();
+    drawMuseBandOverview();
+  }
 });
 document.addEventListener("visibilitychange", function() {
   if (!document.hidden && liveDataTabActive()) {
-    requestAnimationFrame(drawAllSignals);
+    requestAnimationFrame(function() {
+      drawAllSignals();
+      drawMuseBandOverview();
+    });
   }
 });
 

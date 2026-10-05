@@ -95,6 +95,8 @@ A local capture produced about 371 samples/second. HeartMath documentation for e
 
 The current Muse adapter treats EEG as nominally 500 Hz and accelerometer data as nominally 50 Hz. EEG microvolt scaling remains explicitly experimental; accelerometer values are preserved as raw signed counts.
 
+Live Muse data also includes a battery meter, an experimental four-electrode contact indicator based on recent EEG spread, and a combined Delta/Theta/Alpha/Beta/Gamma history graph in logarithmic power. These display aids do not change the recorded raw EEG or the separate band-power signals.
+
 ## Derived physiology panels
 
 ### Pulse-derived panels

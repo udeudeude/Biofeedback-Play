@@ -268,6 +268,17 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("setInterval(pollSignals, 200)", HTML)
         self.assertIn("signalPanelIsDrawable(signal) || state.audioOn", HTML)
 
+    def test_muse_live_summary_shows_battery_contact_and_combined_bands(self):
+        self.assertIn("muse-battery-shell", HTML)
+        self.assertIn("Estimated electrode contact", HTML)
+        self.assertIn("muse-contact-sensor", HTML)
+        self.assertIn("EEG frequency bands", HTML)
+        self.assertIn("museBandCanvas", HTML)
+        self.assertIn("MUSE_BANDS", HTML)
+        self.assertIn("drawMuseBandOverview", HTML)
+        self.assertIn("10 * Math.log10", HTML)
+        self.assertIn("Combined display in dB relative to 1 µV²", HTML)
+
     def test_camera_signals_and_lab_exist(self):
         self.assertIn("camera.ppg_raw", SIGNAL_DEFINITIONS)
         self.assertIn("camera.motion_raw", SIGNAL_DEFINITIONS)

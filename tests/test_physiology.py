@@ -1,7 +1,15 @@
 import math
 import unittest
 
-from physiology import camera_pulse_metrics, eeg_metrics, motion_metrics, pair_metrics, pulse_metrics, skin_metrics
+from physiology import (
+    camera_pulse_metrics,
+    eeg_metrics,
+    motion_metrics,
+    muse_contact_quality,
+    pair_metrics,
+    pulse_metrics,
+    skin_metrics,
+)
 
 
 class PhysiologyTests(unittest.TestCase):
@@ -84,6 +92,25 @@ class PhysiologyTests(unittest.TestCase):
         metrics = camera_pulse_metrics(points, motion)
         self.assertLess(metrics["signal_quality_percent"], 35.0)
         self.assertIsNone(metrics["heart_rate_bpm"])
+
+    def test_muse_contact_quality_uses_robust_eeg_spread(self):
+        rate = 500.0
+        samples = []
+        for i in range(1000):
+            phase = 2 * math.pi * 10 * i / rate
+            samples.append(
+                {
+                    "tp9": 1000.0 + 10.0 * math.sin(phase),
+                    "fp1": 1000.0 + 35.0 * math.sin(phase),
+                    "fp2": 1000.0 + 80.0 * math.sin(phase),
+                    "tp10": 1000.0 + 10.0 * math.sin(phase),
+                }
+            )
+        quality = muse_contact_quality(samples, rate)
+        self.assertEqual(quality["tp9"]["level"], "good")
+        self.assertEqual(quality["fp1"]["level"], "fair")
+        self.assertEqual(quality["fp2"]["level"], "poor")
+        self.assertEqual(quality["tp10"]["level"], "good")
 
     def test_skin_metrics_exposes_tonic_and_slope(self):
         points = [(i * 0.1, 100.0 + i * 0.02) for i in range(700)]
