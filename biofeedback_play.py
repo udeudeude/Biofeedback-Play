@@ -2944,6 +2944,70 @@ input.port { width: 90px; }
 .device-section-counts {
   color: #d7dce8; font-size: 12px; font-weight: 650;
 }
+.muse-live-summary {
+  margin: 12px 14px 2px; padding: 12px;
+  border: 1px solid var(--line); border-radius: 14px;
+  background: rgba(21,24,33,.72);
+}
+.muse-status-strip {
+  display: flex; gap: 16px; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; margin-bottom: 12px;
+}
+.muse-battery {
+  display: inline-flex; align-items: center; gap: 8px; min-width: 120px;
+  font-size: 12px; color: var(--muted);
+}
+.muse-battery-shell {
+  position: relative; width: 34px; height: 16px; padding: 2px;
+  border: 1.5px solid currentColor; border-radius: 4px;
+}
+.muse-battery-shell::after {
+  content: ""; position: absolute; width: 3px; height: 8px; right: -5px; top: 2.5px;
+  border-radius: 0 2px 2px 0; background: currentColor;
+}
+.muse-battery-fill {
+  display: block; height: 100%; border-radius: 2px;
+  background: var(--good); width: var(--battery-level, 0%);
+}
+.muse-contact {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+}
+.muse-contact-label {
+  color: var(--muted); font-size: 11px; margin-right: 2px;
+}
+.muse-contact-sensor {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 7px; border-radius: 999px; border: 1px solid var(--line);
+  font-size: 11px; background: var(--soft);
+}
+.muse-contact-dot {
+  width: 10px; height: 10px; border-radius: 50%; background: #7d8493;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.24);
+}
+.muse-contact-sensor.good .muse-contact-dot { background: var(--good); }
+.muse-contact-sensor.fair .muse-contact-dot { background: #e9b949; }
+.muse-contact-sensor.poor .muse-contact-dot { background: var(--bad); }
+.muse-band-overview {
+  border-top: 1px solid rgba(52,59,78,.7); padding-top: 11px;
+}
+.muse-band-overview-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 10px; flex-wrap: wrap; margin-bottom: 8px;
+}
+.muse-band-overview-title { font-weight: 720; font-size: 14px; }
+.muse-band-overview-note { color: var(--muted); font-size: 10px; }
+.muse-band-overview canvas {
+  width: 100%; height: 150px; display: block; border-radius: 10px;
+  background: #0d1017;
+}
+.muse-band-legend {
+  display: flex; gap: 8px 14px; flex-wrap: wrap; margin-top: 8px;
+  font-size: 11px;
+}
+.muse-band-key { display: inline-flex; gap: 5px; align-items: center; }
+.muse-band-swatch { width: 10px; height: 3px; border-radius: 2px; background: var(--band-color); }
+html[data-theme="light"] .muse-live-summary { background: rgba(255,255,255,.84); }
+html[data-theme="light"] .muse-band-overview canvas { background: #eef1f6; }
 .signal-subsection { padding: 14px 14px 4px; }
 .signal-subsection + .signal-subsection { border-top: 1px solid rgba(52,59,78,.62); }
 .signal-subsection-heading {
@@ -3735,6 +3799,15 @@ const DEVICE_COLORS = {
   muse: "#7f9cf5",
   camera: "#f28b63"
 };
+
+const MUSE_BANDS = [
+  {id: "muse.band.delta", key: "delta", label: "Delta", range: "1–4 Hz", color: "#ef5b5b"},
+  {id: "muse.band.theta", key: "theta", label: "Theta", range: "4–8 Hz", color: "#a678e8"},
+  {id: "muse.band.alpha", key: "alpha", label: "Alpha", range: "8–13 Hz", color: "#4ca8dd"},
+  {id: "muse.band.beta", key: "beta", label: "Beta", range: "13–30 Hz", color: "#72b36a"},
+  {id: "muse.band.gamma", key: "gamma", label: "Gamma", range: "30–45 Hz", color: "#e6a64c"}
+];
+const MUSE_BAND_IDS = MUSE_BANDS.map(function(item) { return item.id; });
 
 function deviceColor(deviceId) {
   return DEVICE_COLORS[deviceId] || "#8b7cf6";
@@ -4559,6 +4632,60 @@ function renderSignalCard(signal) {
   );
 }
 
+function renderMuseLiveSummary(device) {
+  const batteryPercent = device && device.battery && device.battery.percentage != null
+    ? Math.max(0, Math.min(100, Number(device.battery.percentage)))
+    : null;
+  const batteryText = batteryPercent == null ? "waiting for battery" : batteryPercent.toFixed(0) + "%";
+  const batteryLevel = batteryPercent == null ? 0 : batteryPercent;
+  const contact = device && device.contact_quality ? device.contact_quality : {};
+  const sensorSpecs = [
+    ["tp9", "TP9", "left ear"],
+    ["fp1", "FP1", "left forehead"],
+    ["fp2", "FP2", "right forehead"],
+    ["tp10", "TP10", "right ear"]
+  ];
+
+  const sensors = sensorSpecs.map(function(spec) {
+    const info = contact[spec[0]] || {};
+    const level = ["good", "fair", "poor"].includes(info.level) ? info.level : "unknown";
+    const spread = Number.isFinite(Number(info.spread_uv))
+      ? " · " + Number(info.spread_uv).toFixed(0) + " µV spread"
+      : "";
+    return '<span class="muse-contact-sensor ' + level + '" title="' +
+      escapeHtml(spec[2] + spread + " · experimental contact estimate") + '">' +
+      '<span class="muse-contact-dot"></span><span>' + escapeHtml(spec[1]) + '</span></span>';
+  }).join("");
+
+  const legend = MUSE_BANDS.map(function(band) {
+    return '<span class="muse-band-key">' +
+      '<span class="muse-band-swatch" style="--band-color:' + band.color + '"></span>' +
+      '<span><strong>' + band.label + '</strong> ' + band.range +
+      ' · <span id="museBandValue_' + band.key + '">—</span></span></span>';
+  }).join("");
+
+  return '<div class="muse-live-summary">' +
+    '<div class="muse-status-strip">' +
+      '<div class="muse-battery" title="Muse battery telemetry arrives about every 10 seconds">' +
+        '<span class="muse-battery-shell"><span class="muse-battery-fill" style="--battery-level:' +
+          batteryLevel.toFixed(0) + '%"></span></span>' +
+        '<span><strong>Battery</strong> ' + escapeHtml(batteryText) + '</span>' +
+      '</div>' +
+      '<div class="muse-contact">' +
+        '<span class="muse-contact-label">Estimated electrode contact</span>' + sensors +
+      '</div>' +
+    '</div>' +
+    '<div class="muse-band-overview">' +
+      '<div class="muse-band-overview-head">' +
+        '<div class="muse-band-overview-title">EEG frequency bands</div>' +
+        '<div class="muse-band-overview-note">Combined display in dB relative to 1 µV² · experimental</div>' +
+      '</div>' +
+      '<canvas id="museBandCanvas"></canvas>' +
+      '<div class="muse-band-legend">' + legend + '</div>' +
+    '</div>' +
+  '</div>';
+}
+
 function renderSignalPanels(signals) {
   const grid = document.getElementById("signalGrid");
   if (!signals.length) {
@@ -4618,6 +4745,10 @@ function renderSignalPanels(signals) {
             '<span class="device-section-counts">' + escapeHtml(countText) + '</span>' +
           '</div>' +
         '</div>';
+
+    if (deviceId === "muse") {
+      html += renderMuseLiveSummary(device || {});
+    }
 
     if (direct.length) {
       html +=
