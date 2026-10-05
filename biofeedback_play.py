@@ -3714,7 +3714,10 @@ function setTheme(theme) {
     button.textContent = next === "light" ? "Dark mode" : "Light mode";
     button.setAttribute("aria-label", next === "light" ? "Switch to dark mode" : "Switch to light mode");
   }
-  requestAnimationFrame(drawAllSignals);
+  requestAnimationFrame(function() {
+    drawAllSignals();
+    drawMuseBandOverview();
+  });
 }
 
 function loadPanelOrder() {
@@ -4804,6 +4807,9 @@ function renderSignalPanels(signals) {
     };
   });
   observeSignalPanels(signals);
+  if (signals.some(function(signal) { return MUSE_BAND_IDS.includes(signal.id); })) {
+    requestAnimationFrame(drawMuseBandOverview);
+  }
 }
 
 function clearDropIndicators() {
@@ -5410,6 +5416,69 @@ function drawAllSignals() {
   visibleSignals(catalog.signals).forEach(drawSignal);
 }
 
+function drawMuseBandOverview() {
+  const canvas = document.getElementById("museBandCanvas");
+  if (!canvas || document.hidden || !liveDataTabActive()) return;
+
+  const size = fitCanvas(canvas);
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, size.w, size.h);
+
+  ctx.strokeStyle = "#202635";
+  ctx.lineWidth = size.ratio;
+  for (let i = 1; i < 4; i++) {
+    const y = size.h * i / 4;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(size.w, y);
+    ctx.stroke();
+  }
+
+  const series = [];
+  MUSE_BANDS.forEach(function(band) {
+    const signal = catalog.signals.find(function(item) { return item.id === band.id; });
+    if (!signal) return;
+    const state = ensureSignalState(signal);
+    const raw = state.values.slice(-120);
+    const dbValues = raw
+      .filter(function(value) { return Number.isFinite(Number(value)) && Number(value) > 0; })
+      .map(function(value) { return 10 * Math.log10(Number(value)); });
+    if (!dbValues.length) return;
+    series.push({band: band, values: dbValues});
+    const latest = dbValues[dbValues.length - 1];
+    const node = document.getElementById("museBandValue_" + band.key);
+    if (node) node.textContent = latest.toFixed(1) + " dB";
+  });
+
+  if (!series.length) return;
+
+  const all = [];
+  series.forEach(function(item) {
+    item.values.forEach(function(value) { all.push(value); });
+  });
+  let min = Math.min.apply(null, all);
+  let max = Math.max.apply(null, all);
+  if (max === min) { min -= 1; max += 1; }
+  const padding = Math.max(1, (max - min) * 0.08);
+  min -= padding;
+  max += padding;
+
+  series.forEach(function(item) {
+    const values = item.values;
+    ctx.strokeStyle = item.band.color;
+    ctx.lineWidth = 1.6 * size.ratio;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    values.forEach(function(value, index) {
+      const x = index * size.w / Math.max(1, values.length - 1);
+      const y = size.h - ((value - min) / (max - min)) * size.h;
+      if (index === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  });
+}
+
 function formatSignalValue(signal, value) {
   if (value == null || !Number.isFinite(Number(value))) return "—";
   const numeric = Number(value);
@@ -5445,7 +5514,7 @@ function pollSignals() {
   const signals = visibleSignals(catalog.signals).filter(function(signal) {
     if (!(signal.connected && signal.running)) return false;
     const state = ensureSignalState(signal);
-    return signalPanelIsDrawable(signal) || state.audioOn;
+    return signalPanelIsDrawable(signal) || state.audioOn || MUSE_BAND_IDS.includes(signal.id);
   });
   if (!signals.length) return;
 
@@ -5462,6 +5531,7 @@ function pollSignals() {
     .then(r => r.json())
     .then(function(data) {
       const samplesBySignal = data.samples || {};
+      let museBandsChanged = false;
       signals.forEach(function(signal) {
         const state = ensureSignalState(signal);
         const samples = samplesBySignal[signal.id] || [];
@@ -5478,8 +5548,10 @@ function pollSignals() {
         if (samples.length) {
           updateSignalNumbers(signal);
           drawSignal(signal);
+          if (MUSE_BAND_IDS.includes(signal.id)) museBandsChanged = true;
         }
       });
+      if (museBandsChanged) requestAnimationFrame(drawMuseBandOverview);
     })
     .catch(function(err) {
       document.getElementById("error").textContent = String(err);
@@ -5689,11 +5761,17 @@ document.getElementById("copyDiagBtn").onclick = function() {
 document.getElementById("captureFolderBtn").onclick = function() { post("reveal_captures"); };
 
 window.addEventListener("resize", function() {
-  if (document.getElementById("tab-use").classList.contains("active")) drawAllSignals();
+  if (document.getElementById("tab-use").classList.contains("active")) {
+    drawAllSignals();
+    drawMuseBandOverview();
+  }
 });
 document.addEventListener("visibilitychange", function() {
   if (!document.hidden && liveDataTabActive()) {
-    requestAnimationFrame(drawAllSignals);
+    requestAnimationFrame(function() {
+      drawAllSignals();
+      drawMuseBandOverview();
+    });
   }
 });
 
